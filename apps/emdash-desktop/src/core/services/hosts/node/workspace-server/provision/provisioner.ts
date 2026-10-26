@@ -202,6 +202,13 @@ export class WorkspaceServerProvisioner {
     handshake: WireInitializeResult,
     signal: AbortSignal
   ): Promise<WireInitializeResult | null> {
+    const bundledVersion = this.deps.installer.bundledVersion;
+    if (bundledVersion) {
+      if (bundledVersion === handshake.server.appVersion) return null;
+      await this.install(connectionId, layout, signal, bundledVersion);
+      await this.restart(connectionId, layout, signal);
+      return this.waitUntilReady(target, signal);
+    }
     if (!this.deps.devAutoUpdate) return null;
 
     let availableVersion: string;
@@ -320,6 +327,12 @@ export class WorkspaceServerProvisioner {
   }
 
   private publishHealthy(connectionId: string, handshake: WireInitializeResult): void {
+    if (
+      this.deps.installer.bundledVersion &&
+      handshake.server.appVersion !== this.deps.installer.bundledVersion
+    ) {
+      throw provisionError('install-failed', 'Running server does not match the bundled version');
+    }
     this.deps.model.set(connectionId, {
       status: 'healthy',
       version: handshake.server.appVersion,

@@ -19,6 +19,7 @@ import {
   type WorkspaceServerConnection,
 } from './workspace-server/connect/wire-connection-manager';
 import type { WorkspaceServerSshPort } from './workspace-server/ports';
+import type { BundledWorkspaceServer } from './workspace-server/provision/bundled-server';
 import { RemoteWorkspaceServerDaemon } from './workspace-server/provision/daemon-control';
 import { RemoteHostProbe } from './workspace-server/provision/host-probe';
 import { WorkspaceServerInstaller } from './workspace-server/provision/installer';
@@ -32,6 +33,7 @@ export type CreateHostServiceOptions = {
   nextGeneration(): number;
   onReady(attachment: WorkspaceServerConnection): void;
   installBaseUrl?: string;
+  bundledServer?: BundledWorkspaceServer;
   releaseChannel?: ReleaseChannel;
   devAutoUpdate?: boolean;
   client?: { id: string; appVersion: string };
@@ -85,6 +87,7 @@ export function createHostService(options: CreateHostServiceOptions): HostServic
   const installer = new WorkspaceServerInstaller({
     ssh,
     baseUrl: options.installBaseUrl,
+    bundledServer: options.bundledServer,
     releaseChannel: options.releaseChannel,
   });
   const daemon = new RemoteWorkspaceServerDaemon(ssh);

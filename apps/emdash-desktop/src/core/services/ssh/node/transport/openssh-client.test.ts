@@ -1,8 +1,9 @@
-import { generateKeyPairSync } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { once } from 'node:events';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import { Server, utils, type Connection } from 'ssh2';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { SshClientProxy } from '@core/primitives/ssh/api/node/ssh-client-proxy';
@@ -117,6 +118,16 @@ function handleConnection(connection: Connection, stall: boolean): void {
         if (!stall) channel.write(`${marker}\n`);
         return;
       }
+      if (info.command === 'upload') {
+        const hash = createHash('sha256');
+        channel.on('data', (chunk: Buffer) => hash.update(chunk));
+        channel.on('end', () => {
+          channel.write(hash.digest('hex'));
+          channel.exit(0);
+          channel.end();
+        });
+        return;
+      }
       if (info.command === 'hang') return;
       if (info.command === 'overflow') channel.write(Buffer.alloc(4096));
       else {
@@ -176,6 +187,16 @@ async function expectForwardRecovery(
 }
 
 describe.skipIf(process.platform === 'win32')('system OpenSSH transport', () => {
+  it('uploads binary stdin through the system OpenSSH proxy', async () => {
+    const f = await fixture();
+    const proxy = await connect(f);
+    const payload = Buffer.alloc(2 * 1024 * 1024, 173);
+    const result = await proxy.execScript('upload', { stdin: Readable.from([payload]) });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(createHash('sha256').update(payload).digest('hex'));
+    expect(f.serverErrors).toEqual([]);
+  });
+
   it('preserves stdout, stderr and nonzero exit status', async () => {
     const f = await fixture();
     const proxy = await connect(f);

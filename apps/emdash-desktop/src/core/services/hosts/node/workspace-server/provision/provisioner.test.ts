@@ -31,6 +31,47 @@ describe('WorkspaceServerProvisioner', () => {
     await fixture.dispose();
   });
 
+  it('upgrades a compatible server to the version bundled with the desktop', async () => {
+    const fixture = createProvisionerFixture();
+    Object.assign(fixture.installer, { bundledVersion: '1.2.4-pr.test' });
+    fixture.dialOnce
+      .mockResolvedValueOnce(handshake('1.2.3'))
+      .mockResolvedValueOnce(handshake('1.2.4-pr.test'));
+    await fixture.provisioner.ensure();
+    expect(fixture.installer.install).toHaveBeenCalledWith(
+      expect.objectContaining({ version: '1.2.4-pr.test' })
+    );
+    expect(fixture.daemon.restart).toHaveBeenCalledOnce();
+    expect(fixture.installer.availableVersion).not.toHaveBeenCalled();
+    await fixture.dispose();
+  });
+
+  it('rejects a server still reporting the wrong version after bundled installation', async () => {
+    const fixture = createProvisionerFixture();
+    Object.assign(fixture.installer, { bundledVersion: '1.2.4-pr.test' });
+    await expect(fixture.provisioner.ensure()).rejects.toThrow('bundled');
+    await fixture.dispose();
+  });
+
+  it('reuses a matching bundled server without installation or restart', async () => {
+    const fixture = createProvisionerFixture();
+    Object.assign(fixture.installer, { bundledVersion: '1.2.3' });
+    await fixture.provisioner.ensure();
+    expect(fixture.installer.install).not.toHaveBeenCalled();
+    expect(fixture.daemon.restart).not.toHaveBeenCalled();
+    expect(fixture.installer.availableVersion).not.toHaveBeenCalled();
+    await fixture.dispose();
+  });
+
+  it('keeps the existing daemon running when bundled installation fails', async () => {
+    const fixture = createProvisionerFixture();
+    Object.assign(fixture.installer, { bundledVersion: '1.2.4-pr.test' });
+    fixture.installer.install.mockRejectedValue(new Error('checksum failure'));
+    await expect(fixture.provisioner.ensure()).rejects.toThrow('checksum failure');
+    expect(fixture.daemon.restart).not.toHaveBeenCalled();
+    await fixture.dispose();
+  });
+
   it('returns the cached target without re-dialing once provisioned', async () => {
     const fixture = createProvisionerFixture();
     const first = await fixture.provisioner.ensure();
