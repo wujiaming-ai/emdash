@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { app, powerMonitor } from 'electron';
 import type { SshServiceHandle } from '@core/manifests/node/ssh-service-handle';
@@ -6,6 +7,7 @@ import type { SshService } from '@core/primitives/ssh/api';
 import type { AppDb } from '@core/services/app-db/node/db';
 import { sshConnections } from '@core/services/app-db/node/schema';
 import { createHosts, type Hosts } from '@core/services/hosts/node/hosts';
+import { readBundledWorkspaceServer } from '@core/services/hosts/node/workspace-server/provision/bundled-server';
 import { sshCredentialChanges } from '@core/services/ssh/node/credentials/credential-record';
 import { SshCredentialService } from '@core/services/ssh/node/credentials/ssh-credential-service';
 import { createSshService } from '@main/bootstrap/core/ssh-service-factory';
@@ -38,6 +40,9 @@ export async function bootInfrastructure(database: DatabaseBundle): Promise<Infr
     ssh: { manager: ssh.manager, control: ssh.control },
     machineEvents: ssh.machines,
     installBaseUrl: hostSettings.installBaseUrl,
+    bundledServer: app.isPackaged
+      ? await readBundledWorkspaceServer(path.join(process.resourcesPath, 'workspace-server'))
+      : undefined,
     releaseChannel: IS_CANARY ? 'canary' : 'stable',
     devAutoUpdate: process.env['EMDASH_WORKSPACE_SERVER_DEV_AUTO_UPDATE'] === '1',
     client: { id: clientId, appVersion: app.getVersion() },

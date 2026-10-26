@@ -216,3 +216,43 @@ without a global language-server or Node installation. Include TypeScript's
 standard-library declarations and Pyright's type stubs as runtime data. Project
 Python/Rust/Go toolchains remain host-owned. Keep server versions in sync with
 desktop and Core production dependencies.
+
+## Desktop-bundled server artifacts
+
+A custom desktop build can include a `workspace-server/` directory in Electron's
+`resourcesPath` using electron-builder `extraResources`. This is opt-in: desktop
+builds without that directory keep using the configured release channel.
+
+The directory contains the repository's `install.sh`, the selected platform archives,
+and a `manifest.json` with the following shape (replace the checksum placeholders
+with SHA-256 hex digests of the actual files):
+
+```json
+{
+  "version": "0.1.11-custom.1",
+  "protocolVersion": "12.0.0",
+  "installerSha256": "<install.sh SHA-256>",
+  "artifacts": {
+    "linux-x64": "<archive SHA-256>"
+  }
+}
+```
+
+Archive names follow the existing `emdash-workspace-server-<version>-<target>.tar.gz`
+convention. Supported target keys are `linux-x64`, `linux-arm64`, and `darwin-arm64`;
+include only the targets actually packaged. Use a new immutable version for each
+artifact build, and build the server and desktop from compatible source revisions.
+
+The desktop verifies local file checksums, streams the selected archive over the
+existing SSH connection, verifies the uploaded bytes, and invokes the bundled
+installer with a temporary `file://` source. Installation retains the existing
+install lock and atomic `current` symlink switch. Missing target assets, invalid
+metadata, and checksum failures are errors; they do not trigger an online fallback.
+
+A protocol-compatible daemon reporting a different version is installed and restarted
+when this custom desktop connects. This interrupts that host's active Emdash sessions,
+including sessions used by other clients. Matching versions are reused. Avoid using
+custom desktop builds with different pinned versions against the same host. The
+post-install handshake must report the bundled version before the host becomes healthy.
+Protocol-incompatible daemons still require the existing explicit upgrade flow.
+Old version directories are retained for recovery; removing them is a separate action.

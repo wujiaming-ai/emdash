@@ -9,6 +9,7 @@ import {
 import type { SshClientProxy } from '@core/primitives/ssh/api/node/ssh-client-proxy';
 import { validateWorkspaceServerVersion, type WorkspaceServerLayout } from '../layout';
 import type { WorkspaceServerSshPort } from '../ports';
+import { installBundledWorkspaceServer, type BundledWorkspaceServer } from './bundled-server';
 
 export const DEFAULT_WORKSPACE_SERVER_INSTALL_BASE_URL =
   'https://releases.emdash.sh/workspace-server';
@@ -33,6 +34,7 @@ export class WorkspaceServerInstallError extends Error {
 export type WorkspaceServerInstallerOptions = {
   ssh: WorkspaceServerSshPort;
   baseUrl?: string;
+  bundledServer?: BundledWorkspaceServer;
   releaseChannel?: ReleaseChannel;
 };
 
@@ -44,12 +46,16 @@ export type WorkspaceServerInstallOptions = {
 };
 
 export class WorkspaceServerInstaller {
+  private readonly bundledServer?: BundledWorkspaceServer;
+  readonly bundledVersion?: string;
   private readonly ssh: WorkspaceServerSshPort;
   private readonly baseUrl: string;
   private readonly releaseChannel: ReleaseChannel;
 
   constructor(options: WorkspaceServerInstallerOptions) {
     this.ssh = options.ssh;
+    this.bundledServer = options.bundledServer;
+    this.bundledVersion = options.bundledServer?.manifest.version;
     this.baseUrl = options.baseUrl ?? DEFAULT_WORKSPACE_SERVER_INSTALL_BASE_URL;
     this.releaseChannel = options.releaseChannel ?? 'stable';
   }
@@ -64,6 +70,10 @@ export class WorkspaceServerInstaller {
   }
 
   async install(options: WorkspaceServerInstallOptions): Promise<void> {
+    if (this.bundledServer) {
+      await this.installBundled(options);
+      return;
+    }
     const selectedVersion =
       options.version ?? (await this.availableVersion(options.connectionId, options.signal));
     const command = buildWorkspaceServerInstallCommand(this.baseUrl, selectedVersion);
@@ -98,6 +108,28 @@ export class WorkspaceServerInstaller {
         installedVersion === undefined
           ? `Workspace-server installation did not select requested version ${selectedVersion}`
           : `Workspace-server installation installed ${installedVersion} instead of ${selectedVersion}`
+      );
+    }
+  }
+
+  private async installBundled(options: WorkspaceServerInstallOptions): Promise<void> {
+    if (!this.bundledServer) throw new Error('Missing bundled workspace server');
+    if (options.version && options.version !== this.bundledVersion) {
+      throw new WorkspaceServerInstallError(
+        'install-failed',
+        'Requested version differs from bundled server'
+      );
+    }
+    const proxy = await this.ssh.ensureProxy(options.connectionId);
+    try {
+      await installBundledWorkspaceServer(this.bundledServer, proxy, options.signal);
+      const actual = await this.installedVersionFromProxy(proxy, options.layout, options.signal);
+      if (actual !== this.bundledVersion) throw new Error('Bundled server selection did not match');
+    } catch (error) {
+      throw new WorkspaceServerInstallError(
+        'install-failed',
+        'Could not install bundled workspace server',
+        { cause: error }
       );
     }
   }
@@ -139,6 +171,7 @@ export class WorkspaceServerInstaller {
   }
 
   async availableVersion(connectionId: string, signal?: AbortSignal): Promise<string> {
+    if (this.bundledVersion) return this.bundledVersion;
     const expectedProtocolMajor = protocolMajor();
     const proxy = await this.ssh.ensureProxy(connectionId);
     const result = await proxy.execScript(

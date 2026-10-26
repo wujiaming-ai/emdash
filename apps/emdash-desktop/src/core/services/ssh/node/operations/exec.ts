@@ -50,6 +50,8 @@ export function execOnClient(
     };
     const cleanup = () => {
       clearTimeout(timeout);
+      options.stdin?.unpipe();
+      options.stdin?.destroy();
       options.signal?.removeEventListener('abort', handleAbort);
       cleanupClient();
       channel?.off('error', handleChannelError);
@@ -107,6 +109,7 @@ export function execOnClient(
       return;
     }
     options.signal?.addEventListener('abort', handleAbort, { once: true });
+    options.stdin?.once('error', fail);
     client.once('close', handleConnectionClose);
     client.once('end', handleConnectionClose);
     client.once('error', handleConnectionError);
@@ -126,6 +129,7 @@ export function execOnClient(
         channel.stderr.on('data', handleStderr);
         channel.once('error', handleChannelError);
         channel.once('close', handleChannelClose);
+        options.stdin?.pipe(channel);
       });
     } catch (error) {
       fail(error instanceof Error ? error : new Error(String(error)));

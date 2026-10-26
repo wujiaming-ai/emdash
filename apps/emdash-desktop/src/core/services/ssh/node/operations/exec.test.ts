@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { PassThrough } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 import type { Client, ClientChannel } from 'ssh2';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execOnClient, SshExecOutputOverflowError, SshExecTimeoutError } from './exec';
@@ -16,6 +16,27 @@ describe('execOnClient', () => {
     channel.emit('close', 7);
 
     await expect(result).resolves.toEqual({ stdout: 'hello', stderr: 'warning', exitCode: 7 });
+  });
+
+  it('streams supplied stdin to the remote command', async () => {
+    const { client, channel } = fakeExecClient();
+    const input = Readable.from([Buffer.from('archive-data')]);
+    const received: Buffer[] = [];
+    channel.on('data', (chunk: Buffer) => received.push(chunk));
+    const result = execOnClient(client, 'cat > archive', { stdin: input });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(Buffer.concat(received).toString()).toBe('archive-data');
+    await result;
+  });
+
+  it('destroys supplied stdin when the command is cancelled', async () => {
+    const { client } = fakeExecClient();
+    const input = new PassThrough();
+    const controller = new AbortController();
+    const result = execOnClient(client, 'cat', { stdin: input, signal: controller.signal });
+    controller.abort(new Error('cancelled'));
+    await expect(result).rejects.toThrow('cancelled');
+    expect(input.destroyed).toBe(true);
   });
 
   it('rejects and destroys the channel when output exceeds its bound', async () => {
