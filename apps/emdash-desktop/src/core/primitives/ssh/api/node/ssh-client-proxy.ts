@@ -1,4 +1,4 @@
-import type { Duplex } from 'node:stream';
+import type { Duplex, Readable } from 'node:stream';
 import type { Command } from '@emdash/core/primitives/exec/api';
 import type { SshTransportClient } from './ssh-transport-client';
 
@@ -10,6 +10,8 @@ export type SshTcpTarget = {
 };
 
 export type SshExecOptions = {
+  /** 可选二进制输入；命令完成、取消或断线时一并关闭。 */
+  stdin?: Readable;
   timeoutMs?: number;
   signal?: AbortSignal;
   maxStdoutBytes?: number;
