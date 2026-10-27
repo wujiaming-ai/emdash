@@ -51,12 +51,20 @@ function expandEnvironmentStrings(value: string, env: Record<string, string>): s
 
 describe('buildAllowlistedAgentEnv', () => {
   it('adds only explicitly declared names without changing the global allowlist', () => {
-    const source = { LOCAL_API_KEY: 'fixture-only', UNRELATED_SECRET: 'excluded' };
+    const source = {
+      LOCAL_API_KEY: 'fixture-only',
+      UNRELATED_SECRET: 'excluded',
+      'BAD=NAME': 'excluded',
+      'CUSTOM(x86)': 'excluded',
+    };
     expect(buildAllowlistedAgentEnv(source)).not.toHaveProperty('LOCAL_API_KEY');
-    const env = buildAllowlistedAgentEnv(source, { extraKeys: ['LOCAL_API_KEY', 'BAD=NAME'] });
+    const env = buildAllowlistedAgentEnv(source, {
+      extraKeys: ['LOCAL_API_KEY', 'BAD=NAME', 'CUSTOM(x86)'],
+    });
     expect(env.LOCAL_API_KEY).toBe('fixture-only');
     expect(env).not.toHaveProperty('UNRELATED_SECRET');
     expect(env).not.toHaveProperty('BAD=NAME');
+    expect(env).not.toHaveProperty('CUSTOM(x86)');
   });
 
   it('resolves declared custom variables case insensitively on Windows', () => {
