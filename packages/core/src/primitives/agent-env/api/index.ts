@@ -219,7 +219,12 @@ export function buildAllowlistedAgentEnv(
     ...getAllowlistedEnv(sourceEnv, GLOBAL_AGENT_ENV_VARS, platform),
     ...getAllowlistedEnv(sourceEnv, DISPLAY_ENV_VARS, platform),
     ...getAllowlistedEnv(sourceEnv, AGENT_ENV_VARS, platform),
-    ...getAllowlistedEnv(sourceEnv, options.extraKeys ?? [], platform),
+    // 仅校验用户声明的变量，系统白名单包含 ProgramFiles(x86) 等合法 Windows 名称。
+    ...getAllowlistedEnv(
+      sourceEnv,
+      (options.extraKeys ?? []).filter((key) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)),
+      platform
+    ),
   };
 
   if (platform === 'windows') {
@@ -306,7 +311,6 @@ function getAllowlistedEnv(
 ): Record<string, string> {
   const env: Record<string, string> = {};
   for (const key of keys) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
     const value = platform === 'windows' ? getWindowsEnvValue(sourceEnv, key) : sourceEnv[key];
     if (value) env[key] = value;
   }
