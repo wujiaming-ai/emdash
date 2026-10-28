@@ -1,0 +1,34 @@
+diff --git a/dist/session-model.js b/dist/session-model.js
+index 685522a3f4351b07e6f952d44f9445c5c6feb64e..50cfcd58ac80053821bd6b8ea8e3edb1bae4818d 100644
+--- a/dist/session-model.js
++++ b/dist/session-model.js
+@@ -302,11 +302,13 @@ export async function getAvailableModels(query, models, sdkModels, settingsManag
+     // 2. settings.model (user configuration)
+     // 3. the resumed session's live model (resumed sessions only)
+     // 4. models[0] (default first model)
+-    if (process.env.ANTHROPIC_MODEL) {
+-        const match = resolveModelPreference(models, process.env.ANTHROPIC_MODEL);
++    // SDK 子进程会读取 settings.env，适配器必须使用同一模型配置。
++    const environmentModel = process.env.ANTHROPIC_MODEL || settings.env?.ANTHROPIC_MODEL;
++    if (typeof environmentModel === "string" && environmentModel) {
++        const match = resolveModelPreference(models, environmentModel);
+         if (match) {
+             currentModel = match;
+-            resolvedFromInput = process.env.ANTHROPIC_MODEL;
++            resolvedFromInput = environmentModel;
+         }
+     }
+     else if (typeof settings.model === "string") {
+@@ -387,8 +389,10 @@ export async function getAvailableModels(query, models, sdkModels, settingsManag
+     return {
+         availableModels: models.map((model, index) => ({
+             modelId: model.value,
+-            name: displayNameCounts.get(displayNames[index]) === 1 ? displayNames[index] : model.displayName,
+-            description: model.description,
++            // 配置的精确模型 ID 不能继承 SDK 为其他模型生成的名称和说明。
++            name: model.value === resolvedFromInput ? model.value :
++                displayNameCounts.get(displayNames[index]) === 1 ? displayNames[index] : model.displayName,
++            description: model.value === resolvedFromInput ? undefined : model.description,
+         })),
+         currentModelId: currentModel.value,
+     };

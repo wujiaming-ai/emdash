@@ -24,6 +24,13 @@ codex, claude, opencode, grok, devin, qwen, qoder, droid, cursor, copilot, herme
 
 ## Agent Hooks And Notifications
 
+Claude ACP is patched through `pnpm.patchedDependencies` to resolve
+`settings.env.ANTHROPIC_MODEL` alongside the process environment and to display exact
+configured model IDs without unrelated SDK labels. This preserves model identity and
+SDK-advertised effort capabilities when resuming a session whose transcript contains a
+gateway's backend model ID. Keep `claude/model-settings.test.ts` passing when upgrading
+the adapter, and remove the patch only when the upstream behavior covers these cases.
+
 Agent activity, completion, and attention states come from explicit hooks or plugins
 installed by the `tui-agents` runtime in `packages/core/src/runtimes/tui-agents/`. Emdash
 does not infer agent status from terminal output. If a provider has no hook/plugin integration
