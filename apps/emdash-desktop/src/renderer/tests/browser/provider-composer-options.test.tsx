@@ -112,6 +112,74 @@ const model: ProviderConfigOption = {
   currentValue: 'astra',
   options: [{ value: 'astra', name: 'Astra' }],
 };
+
+it.each([false, true])('displays an unlisted custom model with live=%s', async (live) => {
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  const change = vi.fn();
+  const custom = 'custom/model[1m]';
+  try {
+    await act(async () =>
+      root.render(
+        <ChatComposer
+          {...providerComposerOptions(
+            [{ ...model, currentValue: live ? custom : 'astra' }],
+            { model: live ? 'astra' : custom },
+            change,
+            true,
+            live
+          )}
+          onSubmit={() => {}}
+        />
+      )
+    );
+    const trigger = page.elementLocator(container.querySelector('[data-slot="combobox-trigger"]')!);
+    await expect.element(trigger).toHaveTextContent(custom);
+    expect(change).not.toHaveBeenCalled();
+    await act(async () => trigger.click());
+    expect(document.querySelectorAll('[role="option"]')).toHaveLength(1);
+    await act(async () => page.getByRole('option', { name: /^Astra/ }).click());
+    expect(change).toHaveBeenLastCalledWith('model', 'astra');
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
+it('shows model IDs even when the provider assigns a misleading display name', async () => {
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  const change = vi.fn();
+  const custom = 'custom/model[1m]';
+  try {
+    await act(async () =>
+      root.render(
+        <ChatComposer
+          modelOptions={{ [custom]: { name: 'Opus 5 (1M context)' } }}
+          selectedModel={custom}
+          onModelChange={change}
+          onSubmit={() => {}}
+        />
+      )
+    );
+    await act(async () =>
+      page.elementLocator(container.querySelector('[data-slot="combobox-trigger"]')!).click()
+    );
+    const option = page.getByRole('option');
+    await act(async () => page.getByPlaceholder('Search models…').fill('CUSTOM/model'));
+    await expect.element(option).toHaveTextContent(custom);
+    await expect.element(option).toHaveTextContent('Opus 5 (1M context)');
+    await expect
+      .element(option.element().querySelector<HTMLElement>('[title="custom/model[1m]"]')!)
+      .toBeVisible();
+    expect(change).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
 const effort: ProviderConfigOption = {
   id: 'reasoning_effort',
   name: 'Effort',
@@ -216,7 +284,7 @@ it.each([
     await act(async () =>
       page.elementLocator(container.querySelector('[data-slot="combobox-trigger"]')!).click()
     );
-    await act(async () => page.getByRole('option', { name: 'Astra', exact: true }).click());
+    await act(async () => page.getByRole('option', { name: /^Astra/ }).click());
     expect(change).toHaveBeenLastCalledWith('model', 'astra');
     await render(enabledOption, true, { approval: 'full' });
     await act(async () => page.getByRole('combobox', { name: 'Permission mode' }).click());
@@ -322,14 +390,12 @@ it.each([false, true])('shows only native model choices with live=%s', async (li
     );
     expect(document.body.textContent).not.toContain('Use provider default');
     expect(document.querySelectorAll('[role="option"]')).toHaveLength(2);
-    await act(async () => page.getByRole('option', { name: 'Opus', exact: true }).click());
+    await act(async () => page.getByRole('option', { name: /^Opus/ }).click());
     expect(change).toHaveBeenLastCalledWith('native-model', 'opus');
     await act(async () =>
       page.elementLocator(container.querySelector('[data-slot="combobox-trigger"]')!).click()
     );
-    await act(async () =>
-      page.getByRole('option', { name: 'Default (recommended)', exact: true }).click()
-    );
+    await act(async () => page.getByRole('option', { name: /^Default \(recommended\)/ }).click());
     expect(change).toHaveBeenLastCalledWith('native-model', 'default');
   } finally {
     await act(async () => root.unmount());
