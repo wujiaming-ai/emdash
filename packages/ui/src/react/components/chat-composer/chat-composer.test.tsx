@@ -13,6 +13,40 @@ import { ChatComposer } from './index';
 afterEach(cleanup);
 
 describe('ChatComposer', () => {
+  it('shows an unlisted current model without changing the provider choices', async () => {
+    const onModelChange = vi.fn();
+    const { container, findByRole, queryByRole, rerender } = render(
+      <ChatComposer
+        modelOptions={{ sonnet: { name: 'Sonnet' } }}
+        selectedModel="custom/model[1m]"
+        onModelChange={onModelChange}
+        onSubmit={() => {}}
+      />
+    );
+    const trigger = container.querySelector<HTMLButtonElement>('[data-slot="combobox-trigger"]')!;
+    expect(trigger.textContent).toBe('custom/model[1m]');
+    fireEvent.click(trigger);
+    expect(await findByRole('option', { name: /^Sonnet/ })).toBeTruthy();
+    expect(queryByRole('option', { name: 'custom/model[1m]' })).toBeNull();
+    expect(onModelChange).not.toHaveBeenCalled();
+    rerender(
+      <ChatComposer
+        modelOptions={{ sonnet: { name: 'Sonnet' } }}
+        selectedModel="sonnet"
+        onModelChange={onModelChange}
+        onSubmit={() => {}}
+      />
+    );
+    expect(trigger.textContent).toBe('Sonnet');
+  });
+
+  it('keeps the placeholder until a current model is known', () => {
+    const { container } = render(
+      <ChatComposer modelOptions={{ sonnet: { name: 'Sonnet' } }} onSubmit={() => {}} />
+    );
+    expect(container.querySelector('[data-slot="combobox-trigger"]')?.textContent).toBe('Model…');
+  });
+
   it('shows startup failures on the MCP trigger and affected server, including while disabled', async () => {
     const { getByRole, findByRole, queryByText, getByText } = render(
       <ChatComposer

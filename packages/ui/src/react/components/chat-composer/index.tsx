@@ -1006,6 +1006,9 @@ export function ChatComposer({
                 onValueChange={(id) => onModelChange?.(id)}
                 itemToKey={(item) => item.id}
                 itemToLabel={(item) => item.name}
+                filter={(item, query) =>
+                  `${item.name} ${item.id}`.toLowerCase().includes(query.toLowerCase())
+                }
                 disabled={disabled || !onModelChange}
                 searchPlaceholder="Search models…"
                 contentClassName={composerThemeScope}
@@ -1018,7 +1021,10 @@ export function ChatComposer({
                       minWidth: 0,
                       alignItems: 'center',
                       gap: '0.375rem',
-                      color: selected ? 'var(--em-foreground)' : 'var(--em-foreground-muted)',
+                      color:
+                        selected || selectedModel
+                          ? 'var(--em-foreground)'
+                          : 'var(--em-foreground-muted)',
                       fontSize: 'var(--em-text-xs)',
                       lineHeight: 1,
                     }}
@@ -1037,8 +1043,9 @@ export function ChatComposer({
                         lineHeight: 1.25,
                       }}
                     >
-                      {selected?.name ?? 'Model…'}
-                      {selected && selectedEffortItem ? (
+                      {/* 自定义模型可能不在候选列表中，仍保留会话报告的模型名。 */}
+                      {selected?.name ?? (selectedModel || 'Model…')}
+                      {(selected || selectedModel) && selectedEffortItem ? (
                         <span className={styles.selectedModelEffort}>
                           {' '}
                           {selectedEffortItem.name}
@@ -1051,13 +1058,31 @@ export function ChatComposer({
                   <span
                     style={{
                       flex: '1 1 0%',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      minWidth: 0,
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',
                       fontSize: 'var(--em-text-sm)',
                     }}
                   >
-                    {item.name}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {item.name}
+                    </span>
+                    {item.id !== item.name && (
+                      <span
+                        title={item.id}
+                        style={{
+                          color: 'var(--em-foreground-muted)',
+                          fontSize: 'var(--em-text-xs)',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {item.id}
+                      </span>
+                    )}
                   </span>
                 )}
                 renderItemDetail={(item) => <ModelDetailCard item={item} />}
