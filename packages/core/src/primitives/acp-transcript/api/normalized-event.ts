@@ -12,6 +12,7 @@ export type AttachmentRef = {
 
 export type SessionUsage = {
   contextSize: number;
+  contextWindowSource?: 'resolved' | 'estimated' | 'unknown';
   contextUsed: number;
   cost: { amount: number; currency: string } | null;
 };

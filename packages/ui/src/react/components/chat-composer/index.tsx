@@ -1214,7 +1214,7 @@ export function ChatComposer({
 
           {/* Right: usage donut + attach + send/stop */}
           <div className={styles.toolbarRight}>
-            {contextUsage && contextUsage.size > 0 && (
+            {contextUsage && (contextUsage.size > 0 || contextUsage.used > 0) && (
               <ContextUsageIndicator usage={contextUsage} disabled={disabled} />
             )}
             {onAttach && (

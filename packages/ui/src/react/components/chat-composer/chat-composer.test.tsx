@@ -13,6 +13,19 @@ import { ChatComposer } from './index';
 afterEach(cleanup);
 
 describe('ChatComposer', () => {
+  it('keeps unknown-window usage accessible in the toolbar', async () => {
+    const view = render(
+      <ChatComposer
+        onSubmit={() => {}}
+        contextUsage={{ used: 745000, size: 0, windowSource: 'unknown' }}
+      />
+    );
+    fireEvent.click(
+      view.getByRole('button', { name: 'Context window: unknown, 745k tokens used' })
+    );
+    expect(await view.findByText('Window unknown')).toBeTruthy();
+  });
+
   it('shows an unlisted current model without changing the provider choices', async () => {
     const onModelChange = vi.fn();
     const { container, findByRole, queryByRole, rerender } = render(

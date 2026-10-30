@@ -4,6 +4,47 @@ import { AcpTranscriptParser } from '@emdash/core/runtimes/acp/api';
 import { describe, expect, it } from 'vitest';
 import { enrichClaudeUpdate, parseTaskNotification } from './acp-transform';
 
+describe('Claude context window provenance', () => {
+  it.each(['resolved', 'estimated', 'unknown'] as const)(
+    'preserves %s through the provider boundary',
+    (source) => {
+      const raw: SessionUpdate = {
+        sessionUpdate: 'usage_update',
+        used: 745000,
+        size: source === 'unknown' ? 0 : 1000000,
+        _meta: { 'emdash.dev/context-window': source },
+      };
+      const event: NormalizedEvent = {
+        kind: 'usage',
+        usage: { contextUsed: raw.used, contextSize: raw.size, cost: null },
+      };
+      const parser = new AcpTranscriptParser({
+        conversationId: 'window-test',
+        enrich: enrichClaudeUpdate,
+      });
+      parser.push(raw);
+      expect(parser.usage).toEqual({ ...event.usage, contextWindowSource: source });
+    }
+  );
+
+  it.each([undefined, 'invalid'])('marks legacy or invalid provenance as estimated', (source) => {
+    const raw: SessionUpdate = {
+      sessionUpdate: 'usage_update',
+      used: 745000,
+      size: 200000,
+      _meta: source ? { 'emdash.dev/context-window': source } : {},
+    };
+    const result = enrichClaudeUpdate(
+      {
+        kind: 'usage',
+        usage: { contextUsed: raw.used, contextSize: raw.size, cost: null },
+      },
+      raw
+    );
+    expect(result).toMatchObject({ usage: { contextWindowSource: 'estimated' } });
+  });
+});
+
 // ── fixtures ──────────────────────────────────────────────────────────────────
 
 function makeToolCall(
