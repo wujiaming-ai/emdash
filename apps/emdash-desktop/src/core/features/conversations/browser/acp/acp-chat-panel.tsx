@@ -650,6 +650,9 @@ const ComposerForStore = observer(function ComposerForStore({
               ? {
                   used: store.usage.contextUsed,
                   size: store.usage.contextSize,
+                  windowSource:
+                    store.usage.contextWindowSource ??
+                    (providerId === 'claude' ? 'estimated' : undefined),
                   cost: store.usage.cost,
                 }
               : null

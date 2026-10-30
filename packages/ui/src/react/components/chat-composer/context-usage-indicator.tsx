@@ -9,6 +9,7 @@ import { composerThemeScope } from './composer-contract.css';
 export interface ContextUsage {
   used: number;
   size: number;
+  windowSource?: 'resolved' | 'estimated' | 'unknown';
   cost?: { amount: number; currency: string } | null;
 }
 
@@ -58,15 +59,23 @@ function ContextDonut({ fraction }: { fraction: number }) {
 
 // ── Indicator ─────────────────────────────────────────────────────────────────
 
-export function ContextUsageIndicator({
-  usage,
-  disabled,
-}: {
+interface ContextUsageIndicatorProps {
   usage: ContextUsage;
   disabled?: boolean;
-}) {
-  const fraction = Math.min(1, Math.max(0, usage.used / usage.size));
-  const pct = Math.round(fraction * 100);
+}
+
+interface ContextUsageDetailsProps {
+  usage: ContextUsage;
+  known: boolean;
+  fraction: number;
+  pct: number;
+}
+
+export function ContextUsageIndicator({ usage, disabled }: ContextUsageIndicatorProps) {
+  const known = Number.isFinite(usage.size) && usage.size > 0 && usage.windowSource !== 'unknown';
+  const ratio = known ? Math.max(0, usage.used / usage.size) : 0;
+  const fraction = Math.min(1, ratio);
+  const pct = Math.round(ratio * 100);
 
   return (
     <Popover.Root>
@@ -77,7 +86,11 @@ export function ContextUsageIndicator({
             size="xs"
             icon
             disabled={disabled}
-            aria-label={`Context window: ${pct}% used`}
+            aria-label={
+              known
+                ? `Context window: ${pct}% used${usage.windowSource === 'estimated' ? ' (estimated)' : ''}`
+                : `Context window: unknown, ${formatTokens(usage.used)} tokens used`
+            }
           >
             <ContextDonut fraction={fraction} />
           </Button>
@@ -88,24 +101,39 @@ export function ContextUsageIndicator({
         <Popover.Header>
           <Popover.Title>Context usage</Popover.Title>
         </Popover.Header>
-        <div className={styles.usagePopoverBody}>
-          <div className={styles.usageStatsRow}>
-            <span className={styles.usagePercent}>{pct}%</span>
-            <span className={styles.usageTokenCount}>
-              {formatTokens(usage.used)} / {formatTokens(usage.size)} Tokens
-            </span>
-          </div>
-          <div className={styles.usageBarTrack} aria-hidden="true">
-            <div
-              className={cx(styles.usageBarFill, fraction >= 0.9 && styles.usageBarFillWarn)}
-              style={{ width: `${pct}%` }}
-            />
-          </div>
-          {usage.cost ? (
-            <div className={styles.usageCostRow}>Cost: {formatCost(usage.cost)}</div>
-          ) : null}
-        </div>
+        <ContextUsageDetails usage={usage} known={known} fraction={fraction} pct={pct} />
       </Popover.Content>
     </Popover.Root>
+  );
+}
+
+function ContextUsageDetails({ usage, known, fraction, pct }: ContextUsageDetailsProps) {
+  return (
+    <div className={styles.usagePopoverBody}>
+      <div className={styles.usageStatsRow}>
+        <span className={styles.usagePercent}>{known ? `${pct}%` : 'Window unknown'}</span>
+        <span className={styles.usageTokenCount}>
+          {formatTokens(usage.used)}
+          {known ? ` / ${formatTokens(usage.size)}` : ''} Tokens
+        </span>
+      </div>
+      <div className={styles.usageBarTrack} aria-hidden="true">
+        <div
+          className={cx(styles.usageBarFill, fraction >= 0.9 && styles.usageBarFillWarn)}
+          style={{ width: `${fraction * 100}%` }}
+        />
+      </div>
+      {usage.windowSource === 'estimated' && known ? (
+        <div className={styles.usageCostRow}>Estimated window</div>
+      ) : null}
+      {usage.windowSource === 'resolved' && known ? (
+        <div className={styles.usageCostRow}>
+          Current Claude context window; may be limited by auto-compaction policy.
+        </div>
+      ) : null}
+      {usage.cost ? (
+        <div className={styles.usageCostRow}>Cost: {formatCost(usage.cost)}</div>
+      ) : null}
+    </div>
   );
 }

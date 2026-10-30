@@ -1,3 +1,230 @@
+diff --git a/dist/acp-agent.js b/dist/acp-agent.js
+index beba2ff4f21e6805099c55215345a95a046c608a..6b85fa84427a948ae762f0a1f376d3cce804575e 100644
+--- a/dist/acp-agent.js
++++ b/dist/acp-agent.js
+@@ -1,3 +1,4 @@
++import { ContextWindowTracker } from "./context-window.js";
+ import { agent as acpAgent, CreateElicitationResponse, methods, ndJsonStream, RequestError, } from "@agentclientprotocol/sdk";
+ import { deleteSession, getSessionMessages, listSessions, query, } from "@anthropic-ai/claude-agent-sdk";
+ import { GOAL_ACTIONS, GOAL_CONTROL_METHOD, GOAL_EXTENSION_VERSION, goalUpdateFromPrompt, parseGoalRequest, toGoalSnapshot, } from "./goal-extension.js";
+@@ -1586,6 +1587,7 @@ export class ClaudeAcpAgent {
+         if (session.queryClosed) {
+             throw RequestError.internalError(undefined, SESSION_ENDED_MESSAGE);
+         }
++        session.emdashContextWindow.invalidate();
+         const subscriptionGuard = this.runClaudeSubscriptionGuard(params.sessionId, session);
+         if (subscriptionGuard)
+             await subscriptionGuard;
+@@ -2071,6 +2073,7 @@ export class ClaudeAcpAgent {
+             logError: (message, error) => this.logger.error(message, error),
+         });
+         session.contextCompaction = compaction;
++        const contextWindow = session.emdashContextWindow;
+         const sendUpdate = async (notification) => {
+             const { update } = notification;
+             const claudeMeta = update._meta?.claudeCode;
+@@ -2162,17 +2165,13 @@ export class ClaudeAcpAgent {
+         };
+         // ACP's usage_update has no model field, so the model the usage belongs
+         // to rides in `_meta` alongside the other `_claude/*` keys.
+-        const attachUsageModel = (update) => {
+-            if (!lastAssistantModel)
+-                return update;
+-            return {
+-                ...update,
+-                _meta: {
+-                    ...(update._meta ?? {}),
+-                    "_claude/model": lastAssistantModel,
+-                },
+-            };
+-        };
++        const attachUsageModel = (update) => contextWindow.decorate({
++            ...update,
++            _meta: {
++                ...(update._meta ?? {}),
++                ...(lastAssistantModel ? { "_claude/model": lastAssistantModel } : {}),
++            },
++        }, session.contextWindowAuthoritative);
+         const internalErrorForClient = (data, rawDetail) => RequestError.internalError(data, supportsAirSessionFailures(this.clientCapabilities) ? undefined : rawDetail);
+         const ensureUsageMarkdown = (turn) => {
+             if (!turn.isUsageCommand || !turn.usageMarkdownAbort)
+@@ -2218,6 +2217,7 @@ export class ClaudeAcpAgent {
+          *  interrupt (no orphan emitted) — drop the stale count so a later echo-less
+          *  result isn't wrongly skipped. */
+         const activateTurn = (turn) => {
++            contextWindow.invalidate();
+             session.activeTurn = turn;
+             session.cancelled = false;
+             compaction.resume();
+@@ -3792,6 +3792,16 @@ export class ClaudeAcpAgent {
+                                         }),
+                                     }),
+                                 });
++                                // 不等待控制请求，SDK 的结果消费和下一轮 prompt 必须保持畅通。
++                                const query = session.query;
++                                const model = session.models.currentModelId;
++                                void contextWindow.refresh(query,
++                                    () => this.sessions[params.sessionId] === session && !session.queryClosed
++                                        && session.query === query && session.models.currentModelId === model,
++                                    async (update) => {
++                                        session.contextUsedTokens = update.used;
++                                        await this.client.sessionUpdate({ sessionId: params.sessionId, update });
++                                    });
+                             }
+                             if (session.cancelled) {
+                                 session.pendingExitPlanModeInterruption = undefined;
+@@ -4657,6 +4667,7 @@ export class ClaudeAcpAgent {
+                         break;
+                     }
+                     case "conversation_reset": {
++                        contextWindow.invalidate(true);
+                         // The SDK has switched to a fresh conversation, whose Task* IDs
+                         // and task store are independent of the previous transcript.
+                         // Clear both the in-memory snapshot and the client's visible plan
+@@ -5196,6 +5207,7 @@ export class ClaudeAcpAgent {
+             await this.sessionModes.publishCurrent(params.sessionId, effectiveValue);
+         }
+         else if (params.configId === MODEL_CONFIG_ID) {
++            session.emdashContextWindow.invalidate(true);
+             await this.sessions[params.sessionId].query.setModel(resolvedValue);
+         }
+         // Effort SDK sync is handled inside applyConfigOptionValue so that direct
+@@ -5846,6 +5858,7 @@ export class ClaudeAcpAgent {
+             // carries no "1m" token.
+             const newModelInfo = session.modelInfos.find((m) => m.value === value);
+             if (session.models.currentModelId !== value) {
++                session.emdashContextWindow.invalidate(true);
+                 // Seed the new model's context window WITHOUT any IPC on the switch
+                 // path: cached authoritative value if we've already learned it (from a
+                 // prior turn's `result.modelUsage`), else the text heuristic, else the
+@@ -5861,6 +5874,14 @@ export class ClaudeAcpAgent {
+                 const seeded = immediateContextWindow(session.providerCacheKey, value, newModelInfo);
+                 session.contextWindowSize = seeded.size;
+                 session.contextWindowAuthoritative = seeded.authoritative;
++                // 切换模型立即清除旧窗口；新 CLI 窗口在下一轮 result 后确认。
++                await this.client.sessionUpdate({
++                    sessionId,
++                    update: session.emdashContextWindow.decorate({
++                        sessionUpdate: "usage_update", used: session.contextUsedTokens ?? 0,
++                        size: seeded.size,
++                    }, seeded.authoritative),
++                });
+             }
+             session.models = { ...session.models, currentModelId: value };
+             const modeDowngraded = await this.sessionModes.reconcileForModel(session, newModelInfo);
+@@ -6732,6 +6753,7 @@ export class ClaudeAcpAgent {
+                 abortController,
+                 emitRawSDKMessages: sessionMeta?.claudeCode?.emitRawSDKMessages ?? false,
+                 forwardSubagentText,
++                emdashContextWindow: new ContextWindowTracker(this.logger),
+                 contextWindowSize: seededWindow.size,
+                 contextWindowAuthoritative: seededWindow.authoritative,
+                 providerCacheKey,
+diff --git a/dist/context-window.d.ts b/dist/context-window.d.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..1d96fce318737ac697833fc11f22d1d00343b80e
+--- /dev/null
++++ b/dist/context-window.d.ts
+@@ -0,0 +1,14 @@
++import type { SessionUpdate } from '@agentclientprotocol/sdk';
++import type { Query } from '@anthropic-ai/claude-agent-sdk';
++
++type UsageUpdate = Extract<SessionUpdate, { sessionUpdate: 'usage_update' }>;
++export declare class ContextWindowTracker {
++    constructor(logger: { error(message: string): void }, timeoutMs?: number);
++    invalidate(clearWindow?: boolean): void;
++    decorate(update: UsageUpdate, authoritative: boolean): UsageUpdate;
++    refresh(
++        query: Pick<Query, 'getContextUsage'>,
++        isCurrent: () => boolean,
++        publish: (update: UsageUpdate) => Promise<void>,
++    ): Promise<void>;
++}
+diff --git a/dist/context-window.js b/dist/context-window.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..c055b3214261b1345c3305e2204653464f1ccae1
+--- /dev/null
++++ b/dist/context-window.js
+@@ -0,0 +1,79 @@
++/** @typedef {Extract<import('@agentclientprotocol/sdk').SessionUpdate, { sessionUpdate: 'usage_update' }>} UsageUpdate */
++
++// 每个会话单独保留压缩窗口，不能复用按模型缓存的 API 容量。
++export class ContextWindowTracker {
++    /** @type {number | undefined} */
++    window;
++    /** @type {UsageUpdate | undefined} */
++    latest;
++    revision = 0;
++    pending = false;
++
++    /** @param {{ error(message: string): void }} logger @param {number} timeoutMs */
++    constructor(logger, timeoutMs = 2000) {
++        this.logger = logger;
++        this.timeoutMs = timeoutMs;
++    }
++
++    /** @param {boolean} clearWindow @returns {void} */
++    invalidate(clearWindow = false) {
++        this.revision++;
++        if (clearWindow) this.window = undefined;
++    }
++
++    /** @param {UsageUpdate} update @param {boolean} authoritative @returns {UsageUpdate} */
++    decorate(update, authoritative) {
++        this.invalidate();
++        const source = this.window !== undefined ? 'resolved'
++            : authoritative && Number.isFinite(update.size) && update.size > 0 ? 'estimated' : 'unknown';
++        this.latest = {
++            ...update,
++            size: this.window ?? (source === 'estimated' ? update.size : 0),
++            _meta: { ...update._meta, 'emdash.dev/context-window': source },
++        };
++        return this.latest;
++    }
++
++    /**
++     * 仅在 SDK 已返回 result 后调用；首次 prompt 前的控制请求可能阻塞 SDK 通道。
++     * @param {Pick<import('@anthropic-ai/claude-agent-sdk').Query, 'getContextUsage'>} query
++     * @param {() => boolean} isCurrent
++     * @param {(update: UsageUpdate) => Promise<void>} publish
++     * @returns {Promise<void>}
++     */
++    async refresh(query, isCurrent, publish) {
++        if (this.pending || !this.latest || !isCurrent()) return;
++        const revision = this.revision;
++        const previous = this.latest;
++        this.pending = true;
++        /** @type {ReturnType<typeof setTimeout> | undefined} */
++        let timer;
++        try {
++            // 超时不取消 SDK 内部请求；直到原请求结束都禁止重复查询，避免堆积。
++            const request = Promise.resolve().then(() => query.getContextUsage({ detail: 'summary' }))
++                .finally(() => { this.pending = false; });
++            const summary = await Promise.race([
++                request,
++                /** @type {Promise<never>} */ (new Promise((_, reject) => {
++                    timer = setTimeout(() => reject(new Error('context usage timeout')), this.timeoutMs);
++                })),
++            ]);
++            if (revision !== this.revision || !isCurrent()) return;
++            if (!Number.isSafeInteger(summary.rawMaxTokens) || summary.rawMaxTokens <= 0
++                || !Number.isSafeInteger(summary.totalTokens) || summary.totalTokens < 0) {
++                throw new Error('invalid context usage');
++            }
++            this.window = summary.rawMaxTokens;
++            this.latest = {
++                ...previous, used: summary.totalTokens, size: summary.rawMaxTokens,
++                _meta: { ...previous._meta, 'emdash.dev/context-window': 'resolved' },
++            };
++            await publish(this.latest);
++        } catch {
++            // 不记录 SDK 原始错误，避免自定义后端的响应泄漏认证信息。
++            this.logger.error('[context-window] Summary unavailable; retaining the last known window source.');
++        } finally {
++            clearTimeout(timer);
++        }
++    }
++}
 diff --git a/dist/session-model.js b/dist/session-model.js
 index 685522a3f4351b07e6f952d44f9445c5c6feb64e..50cfcd58ac80053821bd6b8ea8e3edb1bae4818d 100644
 --- a/dist/session-model.js

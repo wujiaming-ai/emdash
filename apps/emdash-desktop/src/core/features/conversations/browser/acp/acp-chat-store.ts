@@ -290,6 +290,7 @@ export class AcpChatStore {
   get usage(): {
     contextUsed: number;
     contextSize: number;
+    contextWindowSource?: 'resolved' | 'estimated' | 'unknown';
     cost?: { amount: number; currency: string } | null;
   } | null {
     return this.session?.usage.current() ?? null;

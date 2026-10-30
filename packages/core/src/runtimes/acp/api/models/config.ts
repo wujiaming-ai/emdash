@@ -75,8 +75,10 @@ export const initialSessionConfigState: SessionConfigState = {
 };
 
 export const sessionUsageSchema = z.object({
-  /** Total context window capacity reported by the provider. */
+  /** Provider-reported window; zero when unknown. May reflect compaction policy. */
   contextSize: z.number().int(),
+  /** 可选字段保持旧会话兼容；明确区分生效窗口和 SDK 容量估计。 */
+  contextWindowSource: z.enum(['resolved', 'estimated', 'unknown']).optional(),
   /** Tokens currently consumed in the active session context. */
   contextUsed: z.number().int(),
   /** Cumulative provider-reported cost, or null when the provider omits cost. */
