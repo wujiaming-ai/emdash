@@ -15,6 +15,14 @@ import type { NormalizedEvent } from '@emdash/core/runtimes/acp/api';
  * Unrecognized content remains a message for the renderer's literal fallback.
  */
 export function enrichClaudeUpdate(update: NormalizedEvent, raw: SessionUpdate): NormalizedEvent {
+  if (update.kind === 'usage') {
+    const source = raw._meta?.['emdash.dev/context-window'];
+    if (source === 'resolved' || source === 'estimated' || source === 'unknown') {
+      return { ...update, usage: { ...update.usage, contextWindowSource: source } };
+    }
+    // 旧适配器不能区分模型默认值与真实窗口，只能标为估计。
+    return { ...update, usage: { ...update.usage, contextWindowSource: 'estimated' } };
+  }
   if (update.kind === 'message' && update.role === 'user') {
     if (update.promptId || update.attachments?.length) return update;
     const text = update.text.trim();

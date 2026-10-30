@@ -129,6 +129,10 @@ you select an OrcaRouter model from the OpenCode model picker.
   with a `command` field. Overrides accept executable files or PATH names; use a wrapper script for
   commands with arguments, such as `srt claude`.
 - Claude uses deterministic `--session-id` values for conversation isolation.
+- Claude context usage resolves the CLI's effective window through a summary control request
+  after a result, asynchronously with a two-second wait bound and stale-result guards. SDK model
+  capacity is labeled as an estimate until confirmed; the adapter's default is shown as unknown.
+  Model switches clear the old window and the next response confirms the new policy window.
 - Static plugin model catalogs supply suggestions before a conversation starts. Keep their IDs
   compatible with the provider's ACP catalog and terminal model flag. Preserve saved IDs that are
   absent from the static suggestions; only the live ACP catalog can determine whether a chat
