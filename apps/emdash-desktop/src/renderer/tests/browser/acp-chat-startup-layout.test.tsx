@@ -46,6 +46,7 @@ const fixture = vi.hoisted(() => ({
   store: undefined as unknown,
   restored: false,
   providerId: 'codex',
+  prompts: [] as Array<{ id: string; title: string; prompt: string }>,
   savedOptions: {} as Record<string, string | boolean>,
   settings: undefined as ProviderSettingsSnapshot | undefined,
   draftComments: undefined as DraftCommentsStore | undefined,
@@ -131,7 +132,7 @@ vi.mock('@core/features/integrations/contributions/browser/integration-icon', ()
   IntegrationIcon: () => null,
 }));
 vi.mock('@core/features/library/api/browser/prompts/use-prompt-library', () => ({
-  usePromptLibrary: () => ({ value: [] }),
+  usePromptLibrary: () => ({ value: fixture.prompts }),
 }));
 vi.mock('@core/features/projects/api/browser/stores/project-selectors', () => ({
   getProjectHostAccess: () => undefined,
@@ -985,3 +986,141 @@ it.each([
     }
   }
 );
+
+function commandSession(
+  providerId: string,
+  sendPrompt: AcpLiveSession['sendPrompt']
+): AcpLiveSession {
+  return {
+    usable: true,
+    sessionState: {
+      current: () => ({ canSubmit: true, pendingPermissions: [], queuedPrompts: [] }),
+    },
+    config: {
+      current: () => ({
+        availableCommands: [
+          { name: 'status', description: 'Session status' },
+          { name: providerId === 'codex' ? '$review' : 'review', description: 'Review skill' },
+        ],
+      }),
+    },
+    usage: { current: () => null },
+    mcpServers: { current: () => [] },
+    sendPrompt,
+    dispose: () => {},
+  } as unknown as AcpLiveSession;
+}
+
+async function mountCommandFixture(providerId: string) {
+  fixture.providerId = providerId;
+  fixture.restored = false;
+  fixture.prompts = [{ id: 'saved', title: 'Saved prompt', prompt: 'Explain this code' }];
+  installChatUiRuntime(chatUi);
+  const context = chatUi.createChatContext({ mentionProvider: chatMentionProvider });
+  fixture.context = context;
+  const store = new AcpChatStore('startup-diagnostic', 'project-1', 'task-1');
+  fixture.store = store;
+  const sendPrompt = vi.fn<AcpLiveSession['sendPrompt']>(async () => ok({ queued: false }));
+  runInAction(() => {
+    store.historyLoading = false;
+    store.session = commandSession(providerId, sendPrompt);
+  });
+  const parent = document.createElement('div');
+  parent.className = 'emlight';
+  parent.style.cssText = 'width:900px;height:600px;position:relative';
+  document.body.append(parent);
+  const root = createRoot(parent);
+  await act(async () => root.render(<AcpChatPanel />));
+  return {
+    store,
+    sendPrompt,
+    async cleanup(): Promise<void> {
+      await act(async () => root.unmount());
+      store.dispose();
+      context.dispose();
+      parent.remove();
+      fixture.providerId = 'codex';
+      fixture.prompts = [];
+    },
+  };
+}
+
+it('routes Codex / and $ independently through the panel and submits the native skill text', async () => {
+  const test = await mountCommandFixture('codex');
+  try {
+    await act(async () => {
+      test.store.composerModel.focus();
+      await userEvent.keyboard('/');
+    });
+    await expect.element(page.getByRole('option', { name: /\/status/ })).toBeVisible();
+    await expect
+      .element(page.getByRole('option', { name: /review|Saved prompt/ }))
+      .not.toBeInTheDocument();
+    await act(async () => {
+      await userEvent.keyboard('{Escape}{Backspace}$rev');
+    });
+    await expect.element(page.getByRole('option', { name: /\$review/ })).toBeVisible();
+    await act(async () => userEvent.keyboard('{Enter}'));
+    expect(test.sendPrompt).not.toHaveBeenCalled();
+    expect(test.store.draftText).toBe('$review ');
+    await expect.element(page.getByRole('button', { name: 'Remove $review' })).toBeInTheDocument();
+    await act(async () => userEvent.keyboard('{Backspace}{Backspace}'));
+    expect(test.store.draftText).toBe('$');
+    await expect.element(page.getByRole('option', { name: /\$review/ })).toBeVisible();
+    await act(async () => page.getByRole('option', { name: /\$review/ }).click());
+    await act(async () => userEvent.keyboard('src/main.ts{Enter}'));
+    await vi.waitFor(() => expect(test.sendPrompt).toHaveBeenCalledOnce());
+    expect(test.sendPrompt.mock.calls[0]?.[0].text).toBe('$review src/main.ts');
+  } finally {
+    await test.cleanup();
+  }
+});
+
+it.each(['claude', 'opencode'])(
+  'keeps %s slash commands and plain dollar text',
+  async (providerId) => {
+    const test = await mountCommandFixture(providerId);
+    try {
+      await act(async () => {
+        test.store.composerModel.focus();
+        await userEvent.keyboard('/');
+      });
+      await expect.element(page.getByRole('option', { name: /\/status/ })).toBeVisible();
+      await expect.element(page.getByRole('option', { name: /\/review/ })).toBeVisible();
+      const prompt = page.getByRole('option', { name: /Saved prompt/ });
+      if (providerId === 'opencode') {
+        await expect.element(prompt).toBeVisible();
+        await act(async () => prompt.click());
+        expect(test.store.draftText).toBe('Explain this code');
+        expect(test.sendPrompt).not.toHaveBeenCalled();
+        await act(async () => {
+          test.store.composerModel.clear();
+          test.store.composerModel.focus();
+          await userEvent.keyboard('/');
+        });
+      } else await expect.element(prompt).not.toBeInTheDocument();
+      await act(async () => userEvent.keyboard('{Escape}{Backspace}$review{Enter}'));
+      await vi.waitFor(() => expect(test.sendPrompt).toHaveBeenCalledOnce());
+      expect(test.sendPrompt.mock.calls[0]?.[0].text).toBe('$review');
+    } finally {
+      await test.cleanup();
+    }
+  }
+);
+
+it('leaves unmatched, escaped and embedded dollar text unchanged in Codex', async () => {
+  const test = await mountCommandFixture('codex');
+  const text = 'Price $12.50, $HOME, \\$review, code$review';
+  try {
+    await act(async () => {
+      test.store.composerModel.focus();
+      await userEvent.keyboard(text);
+    });
+    await expect.element(page.getByRole('option')).not.toBeInTheDocument();
+    await act(async () => userEvent.keyboard('{Enter}'));
+    await vi.waitFor(() => expect(test.sendPrompt).toHaveBeenCalledOnce());
+    expect(test.sendPrompt.mock.calls[0]?.[0].text).toBe(text);
+  } finally {
+    await test.cleanup();
+  }
+});

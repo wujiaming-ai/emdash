@@ -55,3 +55,24 @@ export const ControlledCreateMode: Story = {
   args: {},
   render: () => <ControlledCreateEditor />,
 };
+
+export const CodexSkills: Story = {
+  args: {
+    placeholder: 'Type / for commands or $ for skills…',
+    queryCommands: async () => [
+      { id: 'status', name: 'status', behavior: 'insert', description: 'Session status' },
+    ],
+    querySkills: async (query) =>
+      [
+        {
+          id: '$review',
+          name: 'review',
+          prefix: '$' as const,
+          behavior: 'insert' as const,
+          description: 'Review code in the current workspace',
+          section: 'Skills',
+        },
+      ].filter((item) => item.name.includes(query)),
+    onSubmit: () => {},
+  },
+};

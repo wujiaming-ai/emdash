@@ -19,6 +19,8 @@ import * as styles from './mention-pill.css';
 export function SlashCommandPill({ node, deleteNode }: NodeViewProps) {
   const name = (node.attrs.name as string | null) ?? (node.attrs.id as string | null) ?? '';
 
+  const prefix = node.attrs.mentionSuggestionChar === '$' ? '$' : '/';
+
   return (
     <NodeViewWrapper as="span" className={cx('slash-command-pill-wrapper', styles.pillWrapper)}>
       <span
@@ -27,8 +29,10 @@ export function SlashCommandPill({ node, deleteNode }: NodeViewProps) {
         data-slash-command-id={node.attrs.id as string}
       >
         {/* Slash prefix area — relative so the ✕ overlay is positioned inside it */}
-        <span className={styles.pillIconArea} aria-hidden="true">
-          <span style={{ fontSize: '0.75rem', fontWeight: 400, lineHeight: 1 }}>/</span>
+        <span className={styles.pillIconArea}>
+          <span aria-hidden="true" style={{ fontSize: '0.75rem', fontWeight: 400, lineHeight: 1 }}>
+            {prefix}
+          </span>
           {/* Hover-x: overlaid over the prefix on pill-hover */}
           <button
             type="button"
@@ -37,7 +41,7 @@ export function SlashCommandPill({ node, deleteNode }: NodeViewProps) {
               e.stopPropagation();
               deleteNode();
             }}
-            aria-label={`Remove /${name}`}
+            aria-label={`Remove ${prefix}${name}`}
             className={styles.pillRemoveBtn}
           >
             <X style={{ width: '0.625rem', height: '0.625rem' }} />

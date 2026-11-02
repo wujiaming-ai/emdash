@@ -81,7 +81,7 @@ function commandToPopupItem(item: CommandItem): ComboboxPopupItem {
   const label =
     item.behavior === 'insert-text'
       ? (item.label ?? item.name)
-      : `/${item.name.replace(/^\/+/, '')}`;
+      : `${item.prefix ?? '/'}${item.name.replace(/^\/+/, '')}`;
   return {
     id: item.id,
     label,
@@ -123,14 +123,14 @@ function makeSuggestionRender<T>(
       onOpenChange?.(true);
       setSuggestion({
         items: props.items as T[],
-        rect: props.clientRect?.() ?? null,
+        rect: props.items.length > 0 ? (props.clientRect?.() ?? null) : null,
         onSelect: (item) => props.command(item),
       });
     },
     onUpdate(props: SuggestionProps) {
       setSuggestion({
         items: props.items as T[],
-        rect: props.clientRect?.() ?? null,
+        rect: props.items.length > 0 ? (props.clientRect?.() ?? null) : null,
         onSelect: (item) => props.command(item),
       });
     },

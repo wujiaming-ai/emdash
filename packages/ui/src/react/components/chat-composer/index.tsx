@@ -294,6 +294,8 @@ export interface ChatComposerProps {
   queryMentions?: (query: string) => Promise<MentionItem[]>;
   /** Async callback returning / command suggestions for the given query. */
   queryCommands?: (query: string) => Promise<CommandItem[]>;
+  /** 可选的 $ Skill 补全；由宿主按 Agent 能力启用。 */
+  querySkills?: (query: string) => Promise<CommandItem[]>;
   /** Called when a / command with behavior='execute' is selected. */
   onCommand?: (item: CommandItem) => void;
   /** Session-state notice shown flush above the input (e.g. ACP stop reasons). */
@@ -699,6 +701,7 @@ export function ChatComposer({
   renderMentionIcon,
   queryMentions,
   queryCommands,
+  querySkills,
   onCommand,
   onViewImage,
   notice,
@@ -983,6 +986,7 @@ export function ChatComposer({
           renderMentionIcon={renderMentionIcon}
           queryMentions={queryMentions}
           queryCommands={queryCommands}
+          querySkills={querySkills}
           onCommand={onCommand}
           popupClassName={composerThemeScope}
         />

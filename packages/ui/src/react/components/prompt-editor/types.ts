@@ -73,7 +73,9 @@ export type CommandBehavior = 'insert' | 'insert-text' | 'execute';
 
 export interface CommandItem {
   id: string;
-  /** Short display name (no leading slash). */
+  /** 命令前缀；省略时保留原有的 / 行为。 */
+  prefix?: '/' | '$';
+  /** Short display name (without the trigger prefix). */
   name: string;
   /** Text displayed in the popup. Defaults to name if omitted. */
   label?: string;
@@ -163,6 +165,8 @@ export interface PromptEditorProps {
    * Return an empty array if no commands are available.
    */
   queryCommands?: (query: string) => Promise<CommandItem[]>;
+  /** 可选的 $ Skill 补全；未提供时 $ 保持普通文本。 */
+  querySkills?: (query: string) => Promise<CommandItem[]>;
   /** Controlled visibility gate for the command popup. Omit for editor-owned visibility. */
   commandPopupOpen?: boolean;
   /** Called when the command suggestion lifecycle opens or closes. */
