@@ -7,18 +7,19 @@ afterEach(cleanup);
 
 describe('ContextUsageIndicator', () => {
   it.each(['estimated', 'resolved'] as const)(
-    'explains a %s window without changing the token count',
+    'shows a %s window and only labels estimates',
     async (windowSource) => {
       const view = render(
         <ContextUsageIndicator usage={{ used: 745000, size: 1000000, windowSource }} />
       );
       fireEvent.click(view.getByRole('button', { name: /^Context window: 75% used/ }));
       expect(await view.findByText('745k / 1.0M Tokens')).toBeTruthy();
-      expect(
-        view.getByText(
-          windowSource === 'estimated' ? 'Estimated window' : 'Effective context window'
-        )
-      ).toBeTruthy();
+      expect(view.queryByText('Effective context window')).toBeNull();
+      if (windowSource === 'estimated') {
+        expect(view.getByText('Estimated window')).toBeTruthy();
+      } else {
+        expect(view.queryByText('Estimated window')).toBeNull();
+      }
     }
   );
 

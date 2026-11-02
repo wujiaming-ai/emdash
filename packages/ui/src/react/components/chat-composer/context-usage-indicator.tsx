@@ -126,9 +126,6 @@ function ContextUsageDetails({ usage, known, fraction, pct }: ContextUsageDetail
       {usage.windowSource === 'estimated' && known ? (
         <div className={styles.usageCostRow}>Estimated window</div>
       ) : null}
-      {usage.windowSource === 'resolved' && known ? (
-        <div className={styles.usageCostRow}>Effective context window</div>
-      ) : null}
       {usage.cost ? (
         <div className={styles.usageCostRow}>Cost: {formatCost(usage.cost)}</div>
       ) : null}
