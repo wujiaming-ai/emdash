@@ -16,9 +16,7 @@ describe('ContextUsageIndicator', () => {
       expect(await view.findByText('745k / 1.0M Tokens')).toBeTruthy();
       expect(
         view.getByText(
-          windowSource === 'estimated'
-            ? 'Estimated window'
-            : 'Current Claude context window; may be limited by auto-compaction policy.'
+          windowSource === 'estimated' ? 'Estimated window' : 'Effective context window'
         )
       ).toBeTruthy();
     }

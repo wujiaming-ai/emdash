@@ -127,9 +127,7 @@ function ContextUsageDetails({ usage, known, fraction, pct }: ContextUsageDetail
         <div className={styles.usageCostRow}>Estimated window</div>
       ) : null}
       {usage.windowSource === 'resolved' && known ? (
-        <div className={styles.usageCostRow}>
-          Current Claude context window; may be limited by auto-compaction policy.
-        </div>
+        <div className={styles.usageCostRow}>Effective context window</div>
       ) : null}
       {usage.cost ? (
         <div className={styles.usageCostRow}>Cost: {formatCost(usage.cost)}</div>
