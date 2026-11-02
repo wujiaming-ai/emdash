@@ -1,5 +1,5 @@
 diff --git a/dist/acp-agent.js b/dist/acp-agent.js
-index beba2ff4f21e6805099c55215345a95a046c608a..6b85fa84427a948ae762f0a1f376d3cce804575e 100644
+index beba2ff4f21e6805099c55215345a95a046c608a..8ed6197d08d7d5c3203487b93c4fff2fcf48b478 100644
 --- a/dist/acp-agent.js
 +++ b/dist/acp-agent.js
 @@ -1,3 +1,4 @@
@@ -112,7 +112,36 @@ index beba2ff4f21e6805099c55215345a95a046c608a..6b85fa84427a948ae762f0a1f376d3cc
              }
              session.models = { ...session.models, currentModelId: value };
              const modeDowngraded = await this.sessionModes.reconcileForModel(session, newModelInfo);
-@@ -6732,6 +6753,7 @@ export class ClaudeAcpAgent {
+@@ -6669,27 +6690,7 @@ export class ClaudeAcpAgent {
+             if (useRecommendedValue && typeof initialEffort?.currentValue === "string") {
+                 await q.applyFlagSettings({ effortLevel: toSdkEffortLevel(initialEffort.currentValue) });
+             }
+-            // Seed the context window without extra IPC. The cached authoritative
+-            // window from a prior turn wins (`result.modelUsage`, cross-session),
+-            // then the text heuristic, then the default. We deliberately do NOT issue
+-            // a getContextUsage call here: before the first prompt turn that control
+-            // request can take tens of seconds, on resumed as well as fresh sessions.
+-            // The authoritative window arrives on the first `result.modelUsage` and
+-            // is cached from there.
+-            //
+-            // Text inference alone misses aliases that resolve to extended-context
+-            // models with no "1m" token anywhere in their id or description (e.g.
+-            // `sonnet` → claude-sonnet-5, natively ~1M): those stream
+-            // `usage_update.size: 200000` until the first result's modelUsage corrects
+-            // it — but the cache means only the FIRST session to ever run a turn on such
+-            // a model eats that window, not every fresh session after a process
+-            // restart (issue #596).
+-            //
+-            // The inference fallback is deliberately keyed to the allowlisted entry: a
+-            // fallback-resolved sibling's resolvedModel/displayName/description can
+-            // describe a different context lane than the verbatim live id (e.g. an
+-            // "opus[1m]" row matched for a bare 200k id), so on the fallback path only
+-            // the id itself is a trustworthy window signal.
++            // 同步播种不等待控制请求；注册完成后另行异步查询 summary 确认窗口。
+             const seededWindow = immediateContextWindow(providerCacheKey, models.currentModelId, allowlistedModelInfo);
+             this.sessions[sessionId] = {
+                 query: q,
+@@ -6732,6 +6733,7 @@ export class ClaudeAcpAgent {
                  abortController,
                  emitRawSDKMessages: sessionMeta?.claudeCode?.emitRawSDKMessages ?? false,
                  forwardSubagentText,
@@ -120,12 +149,41 @@ index beba2ff4f21e6805099c55215345a95a046c608a..6b85fa84427a948ae762f0a1f376d3cc
                  contextWindowSize: seededWindow.size,
                  contextWindowAuthoritative: seededWindow.authoritative,
                  providerCacheKey,
+@@ -6752,6 +6754,7 @@ export class ClaudeAcpAgent {
+                 fileChangeReporter,
+             };
+             timing.phase("register");
++            this.initializeContextWindow(sessionId, creationOpts.resume === undefined);
+             return {
+                 sessionId,
+                 modes,
+@@ -6763,6 +6766,20 @@ export class ClaudeAcpAgent {
+             throw error;
+         }
+     }
++    /** 初始化完成后异步探测，不把控制请求加入 session/new 或 prompt 的等待链。 */
++    initializeContextWindow(sessionId, fresh) {
++        const session = this.sessions[sessionId];
++        const query = session.query;
++        const model = session.models.currentModelId;
++        void session.emdashContextWindow.initialize(query,
++            () => this.sessions[sessionId] === session && !session.queryClosed
++                && session.query === query && session.models.currentModelId === model,
++            async (update) => {
++                session.contextUsedTokens = update.used;
++                await this.client.sessionUpdate({ sessionId, update });
++            }, fresh);
++    }
++
+     /**
+      * Provider routing is baked into the environment of each SDK Query. Wait for
+      * all submitted turns to settle, close every query, then resume each Claude
 diff --git a/dist/context-window.d.ts b/dist/context-window.d.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..1d96fce318737ac697833fc11f22d1d00343b80e
+index 0000000000000000000000000000000000000000..519301e298eac4315b8c7115305d8e8fa7a4bab6
 --- /dev/null
 +++ b/dist/context-window.d.ts
-@@ -0,0 +1,14 @@
+@@ -0,0 +1,21 @@
 +import type { SessionUpdate } from '@agentclientprotocol/sdk';
 +import type { Query } from '@anthropic-ai/claude-agent-sdk';
 +
@@ -134,18 +192,25 @@ index 0000000000000000000000000000000000000000..1d96fce318737ac697833fc11f22d1d0
 +    constructor(logger: { error(message: string): void }, timeoutMs?: number);
 +    invalidate(clearWindow?: boolean): void;
 +    decorate(update: UsageUpdate, authoritative: boolean): UsageUpdate;
++    initialize(
++        query: Pick<Query, 'getContextUsage'>,
++        isCurrent: () => boolean,
++        publish: (update: UsageUpdate) => Promise<void>,
++        fresh: boolean,
++    ): Promise<void>;
 +    refresh(
 +        query: Pick<Query, 'getContextUsage'>,
 +        isCurrent: () => boolean,
 +        publish: (update: UsageUpdate) => Promise<void>,
++        windowOnly?: boolean,
 +    ): Promise<void>;
 +}
 diff --git a/dist/context-window.js b/dist/context-window.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..c055b3214261b1345c3305e2204653464f1ccae1
+index 0000000000000000000000000000000000000000..a193a5d7c4c70c02f0da9fa1bd50e085ca33b9ed
 --- /dev/null
 +++ b/dist/context-window.js
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,101 @@
 +/** @typedef {Extract<import('@agentclientprotocol/sdk').SessionUpdate, { sessionUpdate: 'usage_update' }>} UsageUpdate */
 +
 +// 每个会话单独保留压缩窗口，不能复用按模型缓存的 API 容量。
@@ -155,6 +220,7 @@ index 0000000000000000000000000000000000000000..c055b3214261b1345c3305e220465346
 +    /** @type {UsageUpdate | undefined} */
 +    latest;
 +    revision = 0;
++    windowRevision = 0;
 +    pending = false;
 +
 +    /** @param {{ error(message: string): void }} logger @param {number} timeoutMs */
@@ -166,7 +232,10 @@ index 0000000000000000000000000000000000000000..c055b3214261b1345c3305e220465346
 +    /** @param {boolean} clearWindow @returns {void} */
 +    invalidate(clearWindow = false) {
 +        this.revision++;
-+        if (clearWindow) this.window = undefined;
++        if (clearWindow) {
++            this.window = undefined;
++            this.windowRevision++;
++        }
 +    }
 +
 +    /** @param {UsageUpdate} update @param {boolean} authoritative @returns {UsageUpdate} */
@@ -183,15 +252,31 @@ index 0000000000000000000000000000000000000000..c055b3214261b1345c3305e220465346
 +    }
 +
 +    /**
-+     * 仅在 SDK 已返回 result 后调用；首次 prompt 前的控制请求可能阻塞 SDK 通道。
++     * 初始化后只确认窗口；恢复会话在重放用量前不能发布虚假的零用量。
 +     * @param {Pick<import('@anthropic-ai/claude-agent-sdk').Query, 'getContextUsage'>} query
 +     * @param {() => boolean} isCurrent
 +     * @param {(update: UsageUpdate) => Promise<void>} publish
++     * @param {boolean} fresh
 +     * @returns {Promise<void>}
 +     */
-+    async refresh(query, isCurrent, publish) {
-+        if (this.pending || !this.latest || !isCurrent()) return;
-+        const revision = this.revision;
++    initialize(query, isCurrent, publish, fresh) {
++        if (fresh && !this.latest) {
++            this.latest = { sessionUpdate: 'usage_update', used: 0, size: 0 };
++        }
++        return this.refresh(query, isCurrent, publish, true);
++    }
++
++    /**
++     * 默认在 result 后更新用量；初始化的 windowOnly 模式只更新上限。
++     * @param {Pick<import('@anthropic-ai/claude-agent-sdk').Query, 'getContextUsage'>} query
++     * @param {() => boolean} isCurrent
++     * @param {(update: UsageUpdate) => Promise<void>} publish
++     * @param {boolean} windowOnly
++     * @returns {Promise<void>}
++     */
++    async refresh(query, isCurrent, publish, windowOnly = false) {
++        if (this.pending || (!windowOnly && !this.latest) || !isCurrent()) return;
++        const revision = windowOnly ? this.windowRevision : this.revision;
 +        const previous = this.latest;
 +        this.pending = true;
 +        /** @type {ReturnType<typeof setTimeout> | undefined} */
@@ -206,15 +291,17 @@ index 0000000000000000000000000000000000000000..c055b3214261b1345c3305e220465346
 +                    timer = setTimeout(() => reject(new Error('context usage timeout')), this.timeoutMs);
 +                })),
 +            ]);
-+            if (revision !== this.revision || !isCurrent()) return;
++            if (revision !== (windowOnly ? this.windowRevision : this.revision) || !isCurrent()) return;
 +            if (!Number.isSafeInteger(summary.rawMaxTokens) || summary.rawMaxTokens <= 0
 +                || !Number.isSafeInteger(summary.totalTokens) || summary.totalTokens < 0) {
 +                throw new Error('invalid context usage');
 +            }
 +            this.window = summary.rawMaxTokens;
++            const usage = windowOnly ? this.latest : previous;
++            if (!usage) return;
 +            this.latest = {
-+                ...previous, used: summary.totalTokens, size: summary.rawMaxTokens,
-+                _meta: { ...previous._meta, 'emdash.dev/context-window': 'resolved' },
++                ...usage, used: windowOnly ? usage.used : summary.totalTokens, size: summary.rawMaxTokens,
++                _meta: { ...usage._meta, 'emdash.dev/context-window': 'resolved' },
 +            };
 +            await publish(this.latest);
 +        } catch {
