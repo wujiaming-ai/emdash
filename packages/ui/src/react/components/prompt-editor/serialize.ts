@@ -52,7 +52,8 @@ export function serializeNode(node: Node): string {
 
   if (node.type.name === 'slashCommand') {
     const name = (node.attrs.name as string | null) ?? (node.attrs.id as string | null) ?? '';
-    return `/${name}`;
+    const prefix = node.attrs.mentionSuggestionChar === '$' ? '$' : '/';
+    return `${prefix}${name}`;
   }
 
   if (node.type.name === 'hardBreak') {

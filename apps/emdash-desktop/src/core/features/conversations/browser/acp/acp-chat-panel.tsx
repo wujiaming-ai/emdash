@@ -64,6 +64,7 @@ import { usePaneContext } from '@core/primitives/workbench-shell/browser/tabs/pa
 import type { AcpChatStore, AcpPromptAttachment } from './acp-chat-store';
 import type { AcpChatTabResource } from './acp-chat-tab-resource';
 import { chatViewCommandForShortcut, executeChatViewCommand } from './acp-chat-view-commands';
+import { selectAgentCommandItems } from './acp-command-items';
 import {
   shouldUseAcpImageAttachment,
   toAcpImageAttachmentMimeType,
@@ -78,19 +79,10 @@ import { createTranscriptFileCommands } from './transcript-file-commands';
 const attachmentDataUrlCache = new Map<string, string>();
 const ISSUE_SEARCH_MIN_LENGTH = 2;
 const ISSUE_SEARCH_LIMIT = 20;
-const SLASH_COMMANDS_SECTION = 'Commands';
 const SLASH_PROMPTS_SECTION = 'Prompts';
 
 function promptPreview(text: string): string {
   return text.split(/\r?\n/, 1)[0] ?? '';
-}
-
-function commandMatchesQuery(command: CommandItem, query: string): boolean {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) return true;
-  return [command.name, command.label, command.description]
-    .filter((value): value is string => !!value)
-    .some((value) => value.toLowerCase().includes(normalized));
 }
 
 function toIssueMentionItem(issue: LinkedIssue): MentionItem {
@@ -557,15 +549,12 @@ const ComposerForStore = observer(function ComposerForStore({
     return <IntegrationIcon provider={target.provider} size={12} />;
   }, []);
 
+  const availableCommands = store.commands;
   const querySlashItems = useCallback(
     async (query: string): Promise<CommandItem[]> => {
       const normalized = query.trim().toLowerCase();
-      const commands = store.commands
-        .filter((command) => commandMatchesQuery(command, normalized))
-        .map((command) => ({
-          ...command,
-          section: SLASH_COMMANDS_SECTION,
-        }));
+      const commands = selectAgentCommandItems(availableCommands, providerId, '/', query);
+      if (providerId === 'codex' || providerId === 'claude') return commands;
       const prompts = promptLibrary
         .filter((prompt) => {
           if (!normalized) return true;
@@ -584,7 +573,12 @@ const ComposerForStore = observer(function ComposerForStore({
         }));
       return [...commands, ...prompts];
     },
-    [store, promptLibrary]
+    [availableCommands, providerId, promptLibrary]
+  );
+  const querySkills = useCallback(
+    async (query: string): Promise<CommandItem[]> =>
+      selectAgentCommandItems(availableCommands, providerId, '$', query),
+    [availableCommands, providerId]
   );
 
   const a = store.affordances;
@@ -660,6 +654,7 @@ const ComposerForStore = observer(function ComposerForStore({
           mentionProvider={mentionProvider}
           renderMentionIcon={renderMentionIcon}
           queryCommands={querySlashItems}
+          querySkills={providerId === 'codex' ? querySkills : undefined}
           attachments={attachments}
           onAttachmentsChange={handleAttachmentsChange}
           onAttach={store.liveActionsEnabled ? handleAttach : undefined}

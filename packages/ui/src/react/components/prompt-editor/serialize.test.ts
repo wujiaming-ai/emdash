@@ -98,6 +98,17 @@ describe('serializeDoc', () => {
     expect(serializeDoc(doc)).toBe('/review this');
   });
 
+  it('preserves a Codex skill prefix and its arguments', () => {
+    const skill = makeNode('slashCommand', {
+      id: '$review',
+      name: 'review',
+      mentionSuggestionChar: '$',
+    });
+    expect(serializeDoc(makeDoc(paragraph(skill, textNode(' src/main.ts'))))).toBe(
+      '$review src/main.ts'
+    );
+  });
+
   it('serializes a hard break as \\n within a paragraph', () => {
     const doc = makeDoc(paragraph(textNode('line1'), hardBreakNode(), textNode('line2')));
     expect(serializeDoc(doc)).toBe('line1\nline2');

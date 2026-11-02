@@ -4,7 +4,7 @@ import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { StarterKit } from '@tiptap/starter-kit';
 import type { SuggestionOptions } from '@tiptap/suggestion';
 import { buildMentionExtension } from './extensions/mention';
-import { buildSlashCommandExtension } from './extensions/slash-command';
+import { buildSlashCommandExtension, closeCommandSuggestions } from './extensions/slash-command';
 import { buildSubmitKeymap } from './extensions/submit-keymap';
 import { serializeDoc, serializeNode } from './serialize';
 import type { MentionItem, PromptEditorProps, PromptEditorRef } from './types';
@@ -121,10 +121,12 @@ export class PromptEditorModel implements PromptEditorRef {
   ): void {
     const view = this.view;
     if (!view) return;
+    const skillsChanged = view.options.querySkills !== options.querySkills;
     view.options = options;
     view.mentions = suggestions.mentions;
     view.commands = suggestions.commands;
     const editor = view.editor;
+    if (skillsChanged) closeCommandSuggestions(editor);
     if (editor.isEditable === !!options.disabled) editor.setEditable(!options.disabled, false);
     if (!options.model && options.value !== undefined) {
       const signature = mentionSignature(options.mentions);
@@ -414,12 +416,27 @@ function createEditor(model: PromptEditorModel, content: JSONContent): Editor {
         {
           items: async ({ query }: { query: string }) => {
             const binding = model.view;
-            const items = await binding?.options.queryCommands?.(query);
-            return model.view === binding ? (items ?? []) : [];
+            const queryCommands = binding?.options.queryCommands;
+            const items = await queryCommands?.(query);
+            return model.view === binding && binding?.options.queryCommands === queryCommands
+              ? (items ?? [])
+              : [];
           },
           render: () => model.suggestionRenderer('commands'),
         },
-        (item) => model.view?.options.onCommand?.(item)
+        (item) => model.view?.options.onCommand?.(item),
+        {
+          allow: () => !!model.view?.options.querySkills,
+          items: async ({ query }: { query: string }) => {
+            const binding = model.view;
+            const querySkills = binding?.options.querySkills;
+            const items = await querySkills?.(query);
+            return model.view === binding && binding?.options.querySkills === querySkills
+              ? (items ?? [])
+              : [];
+          },
+          render: () => model.suggestionRenderer('commands'),
+        }
       ),
       buildSubmitKeymap({
         getShortcut: () => model.view?.options.submitShortcut ?? 'enter',
