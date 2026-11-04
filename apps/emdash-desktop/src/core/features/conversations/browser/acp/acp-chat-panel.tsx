@@ -279,7 +279,7 @@ const ComposerForStore = observer(function ComposerForStore({
 
   const handleSendQueuedPromptNow = useCallback(
     (id: string) => {
-      if (!store.affordances.isWorking) {
+      if (store.canSteer || !store.affordances.isWorking) {
         store.sendQueuedPromptNow(id);
         return;
       }

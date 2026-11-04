@@ -1,4 +1,5 @@
 import type {
+  PromptRequest,
   RequestPermissionRequest,
   RequestPermissionResponse,
   SessionConfigOption,
@@ -113,10 +114,14 @@ export class SessionCell {
     this.rawLog.setAcpSessionId(sessionId);
   }
 
+  private steeringTail: Promise<unknown> = Promise.resolve();
+  private steeringEvents: NormalizedEvent[] | null = null;
+
   get sessionState(): SessionState {
     const state = this.machine.sessionState();
     return {
       ...state,
+      ...(this.deps.agent.steerPrompt ? { canSteer: true } : {}),
       // Partial replay is never an authoritative transcript position.
       transcript: state.lifecycle === 'replaying' ? null : this.transcript.snapshot,
     };
@@ -223,6 +228,10 @@ export class SessionCell {
   }
 
   push(event: NormalizedEvent): void {
+    if (this.steeringEvents) {
+      this.steeringEvents.push(event);
+      return;
+    }
     if (event.kind === 'ignored') return;
     if (event.kind === 'mcp_startup_failure') {
       this.mcpStartupFailures.set(event.server, event.error);
@@ -315,6 +324,118 @@ export class SessionCell {
     ]);
     if (!result.success) return result;
     return ok();
+  }
+
+  /** adapter 在工具边界等待本方法，避免模型先开始下一轮请求。 */
+  async drainQueuedPrompts(): Promise<void> {
+    const ids = this.machine.queuedPrompts.map((prompt) => prompt.id);
+    for (const id of ids) {
+      const result = await this.sendQueuedPromptNow(id, 'next');
+      if (!result.success) {
+        this.deps.logger.warn('Queued Claude supplement failed', { error: result.error });
+        break;
+      }
+      if (this.machine.queuedPrompts.some((prompt) => prompt.id === id)) break;
+    }
+  }
+
+  sendQueuedPromptNow(
+    id: string,
+    priority: 'now' | 'next' = 'now'
+  ): Promise<Result<void, AcpSendPromptError>> {
+    const operation = this.steeringTail.then(() => this.deliverQueuedSupplement(id, priority));
+    this.steeringTail = operation;
+    return operation;
+  }
+
+  private async deliverQueuedSupplement(
+    id: string,
+    priority: 'now' | 'next'
+  ): Promise<Result<void, AcpSendPromptError>> {
+    const steer = this.deps.agent.steerPrompt;
+    if (!steer) return acpErr.invalidState('This agent does not support running-turn input');
+    const prompt = this.machine.queuedPrompts.find((item) => item.id === id);
+    if (!prompt || this.disposed) return ok();
+    if (this.machine.phase.kind !== 'working') {
+      return priority === 'now'
+        ? acpErr.invalidState('No active turn to steer; the prompt remains queued.')
+        : ok();
+    }
+    try {
+      const request = await this.resolveSupplementRequest(prompt);
+      if (this.disposed || this.machine.phase.kind !== 'working') return ok();
+      if (!this.machine.queuedPrompts.some((item) => item === prompt)) return ok();
+      this.steeringEvents = [];
+      // 先认领队列项，避免完成事件或另一次点击将它重复投递。
+      this.removeQueuedPrompt(id);
+      const injected = await steer.call(this.deps.agent, request, priority);
+      if (this.disposed) return ok();
+      if (!injected) {
+        this.queuePrompt(prompt, prompt.id);
+        this.reorderQueue([
+          id,
+          ...this.machine.queuedPrompts.filter((item) => item.id !== id).map((item) => item.id),
+        ]);
+        return ok();
+      }
+      this.rawLog.record({ kind: 'prompt', sessionId: this.acpSessionId, content: request.prompt });
+      this.appendSupplement(prompt);
+      return ok();
+    } catch (error) {
+      this.recordUnconfirmedSupplement(prompt);
+      return acpErr.promptFailed(toSerializedError(error));
+    } finally {
+      const events = this.steeringEvents;
+      this.steeringEvents = null;
+      if (!this.disposed) events?.forEach((event) => this.push(event));
+    }
+  }
+
+  private async resolveSupplementRequest(prompt: QueuedPrompt): Promise<PromptRequest> {
+    const attachments = await Promise.all(
+      (prompt.attachments ?? []).map((item) =>
+        this.deps.resolveAttachment(this.conversationId, item)
+      )
+    );
+    return {
+      sessionId: this.acpSessionId,
+      prompt: [
+        ...attachments.map((item) => ({ type: 'image' as const, ...item })),
+        ...(prompt.text ? [{ type: 'text' as const, text: prompt.text }] : []),
+        ...(prompt.hiddenContext
+          ? [{ type: 'text' as const, text: wrapHiddenContext(prompt.hiddenContext) }]
+          : []),
+      ],
+    };
+  }
+
+  private recordUnconfirmedSupplement(prompt: QueuedPrompt): void {
+    // 响应丢失时不自动重发；保留原文和明确提示，避免默默重复执行。
+    if (this.disposed || this.machine.queuedPrompts.some((item) => item.id === prompt.id)) return;
+    this.appendSupplement(prompt);
+    this.transcript.pushEvent({
+      kind: 'notification',
+      title: 'Message delivery unconfirmed',
+      text: 'The additional message may have reached Claude. Check the response before resending.',
+    });
+    this.emitTranscriptChanged();
+  }
+
+  private appendSupplement(prompt: QueuedPrompt): void {
+    this.transcript.pushEvent({
+      kind: 'message',
+      role: 'user',
+      continuesTurn: true,
+      messageId: `${this.conversationId}-${prompt.id}-user`,
+      promptId: prompt.id,
+      text: prompt.text,
+      attachments: prompt.attachments?.map((item, index) => ({
+        id: item.id,
+        name: item.name ?? `image-${index + 1}`,
+        mimeType: item.mimeType,
+      })),
+    });
+    this.emitTranscriptChanged();
   }
 
   async cancel(): Promise<Result<void, AcpCancelTurnError>> {
@@ -593,7 +714,8 @@ export class SessionCell {
       });
       return result;
     }
-    this.settleTurn(outcome);
+    if (this.deps.agent.steerPrompt) await this.steeringTail;
+    if (!this.disposed) this.settleTurn(outcome);
     return result;
   }
 

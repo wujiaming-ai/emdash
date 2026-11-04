@@ -24,6 +24,7 @@ import type { FsPort } from './fs-port';
 import type { TerminalPort } from './terminal-port';
 
 export interface InboundRouter {
+  onPromptBoundary?(connection: AcpConnectionContext, sessionId: string): Promise<void>;
   onSessionUpdate(
     connection: AcpConnectionContext,
     params: SessionNotification,
@@ -50,6 +51,17 @@ export function buildAgentClient(
   ports: AgentPorts
 ): Client {
   return {
+    extMethod: async (method, params) => {
+      if (
+        method !== '_emdash/drainQueuedPrompts' ||
+        connection.providerId !== 'claude' ||
+        typeof params.sessionId !== 'string'
+      ) {
+        throw new Error('Unsupported ACP extension');
+      }
+      await router.onPromptBoundary?.(connection, params.sessionId);
+      return {};
+    },
     sessionUpdate: async (params: SessionNotification): Promise<void> => {
       router.onSessionUpdate(connection, params, connection.normalize(params.update));
     },

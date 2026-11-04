@@ -481,6 +481,24 @@ describe('createConversationsWireController', () => {
     expect(patchConfig).toHaveBeenCalledOnce();
   });
 
+  it.each([LOCAL_HOST_REF, hostRef('remote', 'steering-server')])(
+    'forwards queued steering to the selected host %j without cancelling',
+    async (host) => {
+      const sendQueuedPromptNow = vi.fn(async () => ok(undefined));
+      const cancelTurn = vi.fn();
+      const controller = setupController({
+        host,
+        client: { acp: { sendQueuedPromptNow, cancelTurn } },
+      });
+      const input = { conversationId: target.conversationId, id: 'queued-1' };
+      await expect(controller.call('acp.sendQueuedPromptNow', input)).resolves.toEqual(
+        ok(undefined)
+      );
+      expect(sendQueuedPromptNow).toHaveBeenCalledWith(input, {});
+      expect(cancelTurn).not.toHaveBeenCalled();
+    }
+  );
+
   it('allows activation to finish before acknowledging prompt acceptance', async () => {
     const sendPrompt = vi.fn(async () => ok({ queued: false }));
     const controller = setupController({

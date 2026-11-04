@@ -74,6 +74,10 @@ export const acpApiContract = defineContract({
     data: sendPromptResponseSchema,
     error: acpSendPromptErrorSchema,
   }),
+  sendQueuedPromptNow: fallible({
+    input: deleteQueuedPromptCommandSchema,
+    error: acpSendPromptErrorSchema,
+  }),
   editQueuedPrompt: fallible({
     input: editQueuedPromptCommandSchema,
     error: acpEditQueuedPromptErrorSchema,

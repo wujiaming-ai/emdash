@@ -1,5 +1,32 @@
+diff --git a/dist/acp-agent.d.ts b/dist/acp-agent.d.ts
+index 593b6d5992de6fedb8e8daee7f98dd7bbcf5b4b6..aa67eaca326663fe1176b621cfaa2cdcf4c01174 100644
+--- a/dist/acp-agent.d.ts
++++ b/dist/acp-agent.d.ts
+@@ -52,12 +52,11 @@ type SteerMeta = {
+     [key: string]: unknown;
+     steering?: {
+         idleBehavior?: "promptRequired";
++        priority?: "now" | "next";
+     };
+ };
+ /** Params of a {@link STEER_METHOD} request. Shaped like the relevant subset of
+- *  a `PromptRequest` so the same `promptToClaude` conversion applies. Delivery
+- *  priority is deliberately NOT exposed here — it's an internal detail the agent
+- *  chooses (see {@link STEER_PRIORITY}). */
++ *  a `PromptRequest` so the same `promptToClaude` conversion applies. Emdash may request next-boundary delivery; pending user input still takes precedence. */
+ export type SteerRequest = {
+     sessionId: string;
+     prompt: PromptRequest["prompt"];
+@@ -834,6 +833,7 @@ export interface AcpClient {
+     completeElicitation(params: CompleteElicitationNotification): Promise<void>;
+     /** Send a custom (extension) notification, e.g. `_claude/sdkMessage`. */
+     extNotification(method: string, params: Record<string, unknown>): Promise<void>;
++    extMethod(method: string, params: Record<string, unknown>): Promise<unknown>;
+ }
+ export declare class ClaudeAcpAgent {
+     sessions: {
 diff --git a/dist/acp-agent.js b/dist/acp-agent.js
-index beba2ff4f21e6805099c55215345a95a046c608a..8ed6197d08d7d5c3203487b93c4fff2fcf48b478 100644
+index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfadb82c82aa 100644
 --- a/dist/acp-agent.js
 +++ b/dist/acp-agent.js
 @@ -1,3 +1,4 @@
@@ -7,7 +34,36 @@ index beba2ff4f21e6805099c55215345a95a046c608a..8ed6197d08d7d5c3203487b93c4fff2f
  import { agent as acpAgent, CreateElicitationResponse, methods, ndJsonStream, RequestError, } from "@agentclientprotocol/sdk";
  import { deleteSession, getSessionMessages, listSessions, query, } from "@anthropic-ai/claude-agent-sdk";
  import { GOAL_ACTIONS, GOAL_CONTROL_METHOD, GOAL_EXTENSION_VERSION, goalUpdateFromPrompt, parseGoalRequest, toGoalSnapshot, } from "./goal-extension.js";
-@@ -1586,6 +1587,7 @@ export class ClaudeAcpAgent {
+@@ -200,6 +201,10 @@ function parseSteerRequest(params) {
+         throw RequestError.invalidParams(undefined, "steer params require a non-empty prompt array");
+     }
+     const steering = _meta && typeof _meta === "object" ? _meta.steering : undefined;
++    const priority = steering && typeof steering === "object" ? steering.priority : undefined;
++    if (priority !== undefined && priority !== "now" && priority !== "next") {
++        throw RequestError.invalidParams(undefined, "unsupported steering priority");
++    }
+     const idleBehavior = steering && typeof steering === "object"
+         ? steering.idleBehavior
+         : undefined;
+@@ -757,6 +762,9 @@ class ClientConnection {
+     extNotification(method, params) {
+         return this.ctx.notify(method, params);
+     }
++    extMethod(method, params) {
++        return this.ctx.request(method, params);
++    }
+ }
+ function raceWithAbort(operation, signal) {
+     return new Promise((resolve, reject) => {
+@@ -1139,6 +1147,7 @@ export class ClaudeAcpAgent {
+                 ...airSessionFailureCapabilityMeta(AGENT_FILE_CHANGE_REPORT_CAPABILITY, AIR_NATIVE_SUBAGENT_SESSIONS_CAPABILITY, AIR_ASYNC_TASKS_CAPABILITY, AIR_RECOMMENDED_CONFIG_VALUE_CAPABILITY),
+                 steering: {
+                     supported: true,
++                    priorities: ["now", "next"],
+                 },
+                 goal: {
+                     version: GOAL_EXTENSION_VERSION,
+@@ -1586,6 +1595,7 @@ export class ClaudeAcpAgent {
          if (session.queryClosed) {
              throw RequestError.internalError(undefined, SESSION_ENDED_MESSAGE);
          }
@@ -15,7 +71,28 @@ index beba2ff4f21e6805099c55215345a95a046c608a..8ed6197d08d7d5c3203487b93c4fff2f
          const subscriptionGuard = this.runClaudeSubscriptionGuard(params.sessionId, session);
          if (subscriptionGuard)
              await subscriptionGuard;
-@@ -2071,6 +2073,7 @@ export class ClaudeAcpAgent {
+@@ -1944,7 +1954,7 @@ export class ClaudeAcpAgent {
+         // Deliver into the running turn rather than queuing behind it as a fresh
+         // prompt would.
+         userMessage.priority =
+-            (session.pendingUserInputCount ?? 0) > 0 ? STEER_PRIORITY_LATER : STEER_PRIORITY_NOW;
++            (session.pendingUserInputCount ?? 0) > 0 ? STEER_PRIORITY_LATER : (params._meta?.steering?.priority ?? STEER_PRIORITY_NOW);
+         // Mark before the push and in the same synchronous section as the in-flight
+         // check: the interrupt can have the CLI finalizing the aborted cycle by the
+         // time the consumer next runs, and an unmarked result would settle the turn
+@@ -1960,7 +1970,10 @@ export class ClaudeAcpAgent {
+         }
+         session.input.push(userMessage);
+         const firstText = params.prompt[0]?.type === "text" ? params.prompt[0].text : "";
+-        await this.publishGoalFromPrompt(sessionId, firstText, steeredUuid);
++        // 入队已经成功，旁路标题更新失败不能使客户端误判并重发。
++        await this.publishGoalFromPrompt(sessionId, firstText, steeredUuid).catch((error) => {
++            this.logger.error("Failed to publish steering goal", error);
++        });
+         return { outcome: "injected" };
+     }
+     async stopAsyncTask(params) {
+@@ -2071,6 +2084,7 @@ export class ClaudeAcpAgent {
              logError: (message, error) => this.logger.error(message, error),
          });
          session.contextCompaction = compaction;
@@ -23,7 +100,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..8ed6197d08d7d5c3203487b93c4fff2f
          const sendUpdate = async (notification) => {
              const { update } = notification;
              const claudeMeta = update._meta?.claudeCode;
-@@ -2162,17 +2165,13 @@ export class ClaudeAcpAgent {
+@@ -2162,17 +2176,13 @@ export class ClaudeAcpAgent {
          };
          // ACP's usage_update has no model field, so the model the usage belongs
          // to rides in `_meta` alongside the other `_claude/*` keys.
@@ -48,7 +125,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..8ed6197d08d7d5c3203487b93c4fff2f
          const internalErrorForClient = (data, rawDetail) => RequestError.internalError(data, supportsAirSessionFailures(this.clientCapabilities) ? undefined : rawDetail);
          const ensureUsageMarkdown = (turn) => {
              if (!turn.isUsageCommand || !turn.usageMarkdownAbort)
-@@ -2218,6 +2217,7 @@ export class ClaudeAcpAgent {
+@@ -2218,6 +2228,7 @@ export class ClaudeAcpAgent {
           *  interrupt (no orphan emitted) — drop the stale count so a later echo-less
           *  result isn't wrongly skipped. */
          const activateTurn = (turn) => {
@@ -56,7 +133,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..8ed6197d08d7d5c3203487b93c4fff2f
              session.activeTurn = turn;
              session.cancelled = false;
              compaction.resume();
-@@ -3792,6 +3792,16 @@ export class ClaudeAcpAgent {
+@@ -3792,6 +3803,16 @@ export class ClaudeAcpAgent {
                                          }),
                                      }),
                                  });
@@ -73,7 +150,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..8ed6197d08d7d5c3203487b93c4fff2f
                              }
                              if (session.cancelled) {
                                  session.pendingExitPlanModeInterruption = undefined;
-@@ -4657,6 +4667,7 @@ export class ClaudeAcpAgent {
+@@ -4657,6 +4678,7 @@ export class ClaudeAcpAgent {
                          break;
                      }
                      case "conversation_reset": {
@@ -81,7 +158,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..8ed6197d08d7d5c3203487b93c4fff2f
                          // The SDK has switched to a fresh conversation, whose Task* IDs
                          // and task store are independent of the previous transcript.
                          // Clear both the in-memory snapshot and the client's visible plan
-@@ -5196,6 +5207,7 @@ export class ClaudeAcpAgent {
+@@ -5196,6 +5218,7 @@ export class ClaudeAcpAgent {
              await this.sessionModes.publishCurrent(params.sessionId, effectiveValue);
          }
          else if (params.configId === MODEL_CONFIG_ID) {
@@ -89,7 +166,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..8ed6197d08d7d5c3203487b93c4fff2f
              await this.sessions[params.sessionId].query.setModel(resolvedValue);
          }
          // Effort SDK sync is handled inside applyConfigOptionValue so that direct
-@@ -5846,6 +5858,7 @@ export class ClaudeAcpAgent {
+@@ -5846,6 +5869,7 @@ export class ClaudeAcpAgent {
              // carries no "1m" token.
              const newModelInfo = session.modelInfos.find((m) => m.value === value);
              if (session.models.currentModelId !== value) {
@@ -97,7 +174,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..8ed6197d08d7d5c3203487b93c4fff2f
                  // Seed the new model's context window WITHOUT any IPC on the switch
                  // path: cached authoritative value if we've already learned it (from a
                  // prior turn's `result.modelUsage`), else the text heuristic, else the
-@@ -5861,6 +5874,14 @@ export class ClaudeAcpAgent {
+@@ -5861,6 +5885,14 @@ export class ClaudeAcpAgent {
                  const seeded = immediateContextWindow(session.providerCacheKey, value, newModelInfo);
                  session.contextWindowSize = seeded.size;
                  session.contextWindowAuthoritative = seeded.authoritative;
@@ -112,7 +189,32 @@ index beba2ff4f21e6805099c55215345a95a046c608a..8ed6197d08d7d5c3203487b93c4fff2f
              }
              session.models = { ...session.models, currentModelId: value };
              const modeDowngraded = await this.sessionModes.reconcileForModel(session, newModelInfo);
-@@ -6669,27 +6690,7 @@ export class ClaudeAcpAgent {
+@@ -6422,8 +6454,24 @@ export class ClaudeAcpAgent {
+             tools,
+             hooks: {
+                 ...userProvidedOptions?.hooks,
++                PostToolUseFailure: [
++                    ...(userProvidedOptions?.hooks?.PostToolUseFailure || []),
++                    { hooks: [async (input) => {
++                        if (!input.agent_id && this.clientCapabilities?._meta?.["emdash.dev/queued-steering"] === true) {
++                            await this.client.extMethod("_emdash/drainQueuedPrompts", { sessionId });
++                        }
++                        return {};
++                    }] },
++                ],
+                 PostToolUse: [
+                     ...(userProvidedOptions?.hooks?.PostToolUse || []),
++                    { hooks: [async (input) => {
++                        // 主 agent 在工具边界取得补充消息，不抢占正在运行的工具。
++                        if (!input.agent_id && this.clientCapabilities?._meta?.["emdash.dev/queued-steering"] === true) {
++                            await this.client.extMethod("_emdash/drainQueuedPrompts", { sessionId });
++                        }
++                        return {};
++                    }] },
+                     {
+                         hooks: [
+                             createPostToolUseHook({
+@@ -6669,27 +6717,7 @@ export class ClaudeAcpAgent {
              if (useRecommendedValue && typeof initialEffort?.currentValue === "string") {
                  await q.applyFlagSettings({ effortLevel: toSdkEffortLevel(initialEffort.currentValue) });
              }
@@ -141,7 +243,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..8ed6197d08d7d5c3203487b93c4fff2f
              const seededWindow = immediateContextWindow(providerCacheKey, models.currentModelId, allowlistedModelInfo);
              this.sessions[sessionId] = {
                  query: q,
-@@ -6732,6 +6733,7 @@ export class ClaudeAcpAgent {
+@@ -6732,6 +6760,7 @@ export class ClaudeAcpAgent {
                  abortController,
                  emitRawSDKMessages: sessionMeta?.claudeCode?.emitRawSDKMessages ?? false,
                  forwardSubagentText,
@@ -149,7 +251,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..8ed6197d08d7d5c3203487b93c4fff2f
                  contextWindowSize: seededWindow.size,
                  contextWindowAuthoritative: seededWindow.authoritative,
                  providerCacheKey,
-@@ -6752,6 +6754,7 @@ export class ClaudeAcpAgent {
+@@ -6752,6 +6781,7 @@ export class ClaudeAcpAgent {
                  fileChangeReporter,
              };
              timing.phase("register");
@@ -157,7 +259,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..8ed6197d08d7d5c3203487b93c4fff2f
              return {
                  sessionId,
                  modes,
-@@ -6763,6 +6766,20 @@ export class ClaudeAcpAgent {
+@@ -6763,6 +6793,20 @@ export class ClaudeAcpAgent {
              throw error;
          }
      }

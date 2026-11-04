@@ -265,6 +265,10 @@ export class AcpLiveSession {
     return this.client.changeQueuePromptOrder({ conversationId: this.conversationId, ids });
   }
 
+  sendQueuedPromptNow(id: string): Promise<Result<void, unknown>> {
+    return this.client.sendQueuedPromptNow({ conversationId: this.conversationId, id });
+  }
+
   cancelTurn(): Promise<Result<void, unknown>> {
     return this.client.cancelTurn({ conversationId: this.conversationId });
   }

@@ -719,6 +719,36 @@ describe('AcpChatStore prompt submission', () => {
     expect(store.draftText).toBe('newer draft');
   });
 
+  it.each([true, false])(
+    'uses advertised steering capability %s without changing other agents',
+    async (canSteer) => {
+      const state = { ...idleState(), canSteer, isGenerating: true, lifecycle: 'working' as const };
+      state.queuedPrompts.push({ id: 'queued-1', text: 'hello', createdAt: 1, updatedAt: 1 });
+      const changeQueuePromptOrder = vi.fn(async () => ({ success: true, data: undefined }));
+      const cancelTurn = vi.fn(async () => ({ success: true, data: undefined }));
+      const sendQueuedPromptNow = vi.fn(async () => ({ success: true, data: undefined }));
+      const store = createStore(state, vi.fn(), {
+        changeQueuePromptOrder,
+        cancelTurn,
+        sendQueuedPromptNow,
+      });
+      try {
+        store.sendQueuedPromptNow('queued-1');
+        if (canSteer) {
+          await vi.waitFor(() => expect(sendQueuedPromptNow).toHaveBeenCalledWith('queued-1'));
+          expect(cancelTurn).not.toHaveBeenCalled();
+          expect(changeQueuePromptOrder).not.toHaveBeenCalled();
+        } else {
+          await vi.waitFor(() => expect(cancelTurn).toHaveBeenCalledOnce());
+          expect(changeQueuePromptOrder).toHaveBeenCalledWith(['queued-1']);
+          expect(sendQueuedPromptNow).not.toHaveBeenCalled();
+        }
+      } finally {
+        store.dispose();
+      }
+    }
+  );
+
   it('does not cancel a queued prompt that was started from an idle queue', async () => {
     const state = idleState();
     state.queuedPrompts.push({

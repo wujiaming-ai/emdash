@@ -7,13 +7,13 @@ import {
   homebrewOption,
   passthroughMcpAdapter,
 } from '@emdash/core/services/agent-plugins/api/plugins/helpers';
-import { connectStdioAcp } from '../../helpers/acp-stdio';
 import { resolveAdapterAsset } from '../../helpers/adapter-assets';
 import { enrichClaudeUpdate } from './acp-transform';
 import { claudeAdapter } from './adapter';
 import { claudeAuthStatus } from './auth';
 import { buildClaudeHookConfig } from './hooks';
 import { icon } from './icon';
+import { connectClaudeAcp } from './steering';
 import { buildClaudeTrustBehavior } from './trust';
 import { probeClaudeUsage } from './usage';
 
@@ -156,7 +156,7 @@ export const provider = registerPluginBehavior(plugin, {
       },
     }),
     connect: (io, toClient) => {
-      return connectStdioAcp(io, toClient);
+      return connectClaudeAcp(io, toClient);
     },
     enrich: enrichClaudeUpdate,
   },
