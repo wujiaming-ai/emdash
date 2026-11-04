@@ -11,6 +11,7 @@ import type { InboundRouter } from '#runtimes/acp/node/agent-ports/agent-client'
 import type { AcpConnectionContext } from '#runtimes/acp/node/connection/source';
 
 export interface SessionRouteTarget {
+  onPromptBoundary?(conversationId: string, connection: AcpConnectionContext): Promise<void>;
   onSessionUpdate(
     conversationId: string,
     connection: AcpConnectionContext,
@@ -37,6 +38,14 @@ export class SessionRouter implements InboundRouter {
     private readonly target: SessionRouteTarget,
     private readonly logger: Logger
   ) {}
+
+  async onPromptBoundary(connection: AcpConnectionContext, sessionId: string): Promise<void> {
+    const conversationId = this.resolveConversationForSession(
+      routeOwnerId(connection.key, connection.generation),
+      sessionId
+    );
+    if (conversationId) await this.target.onPromptBoundary?.(conversationId, connection);
+  }
 
   onSessionUpdate(
     connection: AcpConnectionContext,

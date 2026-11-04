@@ -99,6 +99,13 @@ export class AcpRuntime {
     return this.manager.sendPrompt({ conversationId, prompt, placement, promptId });
   }
 
+  sendQueuedPromptNow(
+    conversationId: string,
+    id: string
+  ): Promise<Result<void, AcpSendPromptError>> {
+    return this.manager.sendQueuedPromptNow(conversationId, id);
+  }
+
   editQueuedPrompt(
     conversationId: string,
     id: string,

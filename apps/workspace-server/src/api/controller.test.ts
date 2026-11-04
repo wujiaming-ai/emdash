@@ -270,6 +270,7 @@ function createFakeAcpClient(): ContractClient<AcpApiContract> {
     editQueuedPrompt: vi.fn(),
     deleteQueuedPrompt: vi.fn(),
     changeQueuePromptOrder: vi.fn(),
+    sendQueuedPromptNow: vi.fn(),
     cancelTurn: vi.fn(),
     setOption: vi.fn(),
     resolvePermission: vi.fn(),

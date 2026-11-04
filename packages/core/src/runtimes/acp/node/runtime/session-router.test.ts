@@ -6,6 +6,23 @@ import type { AcpConnectionContext } from '#runtimes/acp/node/connection/source'
 import { SessionRouter, type SessionRouteTarget } from './session-router';
 
 describe('SessionRouter', () => {
+  it('routes prompt boundaries only to the matching process generation', async () => {
+    const onPromptBoundary = vi.fn().mockResolvedValue(undefined);
+    const router = new SessionRouter({ ...targetSpy(), onPromptBoundary }, noopLogger);
+    router.register('claude:/repo:1', 'session', 'conversation');
+    await router.onPromptBoundary(context(2), 'session');
+    await router.onPromptBoundary(context(1), 'unknown');
+    expect(onPromptBoundary).not.toHaveBeenCalled();
+    await router.onPromptBoundary(context(1), 'session');
+    expect(onPromptBoundary).toHaveBeenCalledWith(
+      'conversation',
+      expect.objectContaining({ generation: 1 })
+    );
+    router.invalidate('claude:/repo:1');
+    await router.onPromptBoundary(context(1), 'session');
+    expect(onPromptBoundary).toHaveBeenCalledOnce();
+  });
+
   it('drops unknown updates instead of retaining them for a later registration', () => {
     const target = targetSpy();
     const router = new SessionRouter(target, noopLogger);

@@ -128,6 +128,23 @@ Startup/authentication failures are returned before acceptance. Provider failure
 are published through the existing session and transcript state. Callers that need completion
 observe that state; the send acknowledgement no longer means the turn has finished.
 
+Claude running-turn input (protocol 12.3) is capability-gated by optional
+`SessionState.canSteer`. Ordinary input stays in the existing editable queue. The
+patched Claude adapter requests `_emdash/drainQueuedPrompts` at main-thread
+PostToolUse/PostToolUseFailure boundaries; the generation-scoped router delegates
+to the owning cell, which injects with SDK priority `next`. If hooks are disabled,
+the existing end-of-turn queue remains the fallback. The existing Send now action
+uses `sendQueuedPromptNow({ conversationId, id })` and SDK priority `now`, without
+`session/cancel`; pending permission/elicitation callbacks retain the adapter's
+`later` protection. Stop and other agents retain their previous behavior.
+
+A cell serializes and claims queued deliveries, preserves supplement message IDs
+inside the active transcript turn, and buffers updates until the steering receipt.
+Only an explicit `promptRequired` response restores the prompt to the ordinary
+queue. An ambiguous failure retains the text with an unconfirmed-delivery notice
+instead of automatically resending. Older servers omit `canSteer`, so the desktop
+keeps its previous queue action without calling the new procedure.
+
 The desktop subscribes before submission and refreshes both live snapshots and committed history
 after reattachment, even when no active turn was observed before the outage. History reads are
 fenced to the current attachment and retried after transient failure; a newly active turn defers

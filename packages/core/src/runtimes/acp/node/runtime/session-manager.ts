@@ -121,6 +121,15 @@ export class SessionManager {
     this.clock = deps.clock ?? systemClock;
     this.router = new SessionRouter(
       {
+        onPromptBoundary: async (conversationId, connection) => {
+          const record = this.readyRecord(conversationId);
+          if (
+            record &&
+            record.processKey === connection.key &&
+            record.processGeneration === connection.generation
+          )
+            await record.cell.drainQueuedPrompts();
+        },
         onSessionUpdate: (conversationId, connection, params, event) =>
           this.handleSessionUpdate(conversationId, connection, params, event),
         onPermissionRequest: (conversationId, connection, params) =>
@@ -391,6 +400,15 @@ export class SessionManager {
     } finally {
       await lease.release();
     }
+  }
+
+  async sendQueuedPromptNow(
+    conversationId: string,
+    id: string
+  ): Promise<Result<void, AcpSendPromptError>> {
+    const record = this.readyRecord(conversationId);
+    if (!record) return acpErr.conversationNotFound(conversationId);
+    return record.cell.sendQueuedPromptNow(id);
   }
 
   editQueuedPrompt(

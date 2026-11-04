@@ -430,7 +430,7 @@ function reduceInput(s: ParserState, input: ReducerInput, deps: ReducerDeps): Pa
 
   // OPEN boundary: a new user message starts a new turn.
   if (event.kind === 'message' && event.role === 'user') {
-    if (isNewUserMessage(t.active, event, segment)) {
+    if ((!event.continuesTurn || !t.active) && isNewUserMessage(t.active, event, segment)) {
       t = closeActive(t, input.at);
       t = openTurn(t, deps, 'user');
       segment = initialSegment();

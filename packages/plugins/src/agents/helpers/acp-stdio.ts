@@ -1,7 +1,6 @@
 import { Readable, Writable } from 'node:stream';
 import { ClientSideConnection, ndJsonStream } from '@agentclientprotocol/sdk';
 import type {
-  AcpAgentApi,
   AcpClientFactory,
   AcpProcessIo,
   AcpSpawnContext,
@@ -13,7 +12,10 @@ type NativeAcpSpawnResult = Omit<AcpSpawnResult, 'command'> & {
   command?: string;
 };
 
-export function connectStdioAcp(io: AcpProcessIo, toClient: AcpClientFactory): AcpAgentApi {
+export function connectStdioAcp(
+  io: AcpProcessIo,
+  toClient: AcpClientFactory
+): ClientSideConnection {
   const stream = ndJsonStream(
     Writable.toWeb(io.stdin) as WritableStream<Uint8Array>,
     Readable.toWeb(io.stdout) as unknown as ReadableStream<Uint8Array>

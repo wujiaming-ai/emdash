@@ -280,6 +280,10 @@ export class AcpChatStore {
     }));
   }
 
+  get canSteer(): boolean {
+    return this.session?.sessionState.current().canSteer === true;
+  }
+
   get queuedPrompts(): ComposerQueuedPrompt[] {
     return this._queuedPromptModels().map((prompt) => ({
       id: prompt.id,
@@ -829,6 +833,15 @@ export class AcpChatStore {
     const current = this._queuedPromptModels();
     if (!current.some((prompt) => prompt.id === id)) return;
 
+    if (this.canSteer) {
+      try {
+        const result = await this.session?.sendQueuedPromptNow(id);
+        if (!result?.success) this._toastError('Failed to send queued prompt', result?.error);
+      } catch (error) {
+        this._toastError('Message delivery unconfirmed', error);
+      }
+      return;
+    }
     const shouldCancelActiveTurn = this.affordances.isWorking;
     const ids = [id, ...current.map((prompt) => prompt.id).filter((promptId) => promptId !== id)];
     const reorderResult = await this.session?.changeQueuePromptOrder(ids);

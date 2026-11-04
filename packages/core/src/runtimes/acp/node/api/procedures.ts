@@ -51,6 +51,12 @@ export function createAcpProcedures(runtime: AcpRuntime) {
         input.promptId
       );
     },
+    sendQueuedPromptNow(input: {
+      conversationId: string;
+      id: string;
+    }): Promise<Result<void, AcpSendPromptError>> {
+      return runtime.sendQueuedPromptNow(input.conversationId, input.id);
+    },
     editQueuedPrompt(input: {
       conversationId: string;
       id: string;

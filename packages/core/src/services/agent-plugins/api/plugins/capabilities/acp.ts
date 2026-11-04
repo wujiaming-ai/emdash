@@ -55,6 +55,8 @@ export interface AcpAgentApi {
   loadSession?(params: LoadSessionRequest): Promise<LoadSessionResponse>;
   prompt(params: PromptRequest): Promise<PromptResponse>;
   cancel(params: CancelNotification): Promise<void>;
+  /** 将补充消息交给当前 turn；false 表示调用方应保留普通队列。 */
+  steerPrompt?(params: PromptRequest, priority: 'now' | 'next'): Promise<boolean>;
   /** Optional — only available when the agent advertises the `setSessionConfigOption` capability. */
   setSessionConfigOption?(
     params: SetSessionConfigOptionRequest

@@ -26,6 +26,8 @@ export type SessionLifecycle = z.infer<typeof sessionLifecycleSchema>;
 
 export const sessionStateSchema = z.object({
   lifecycle: sessionLifecycleSchema,
+  /** 可在现有 turn 中发送补充消息；旧服务省略。 */
+  canSteer: z.boolean().optional(),
   /** Present and true when the conversation is retained without a live provider session. */
   suspended: z.literal(true).optional(),
   /** Current control-plane turn id, or null when no prompt/replay turn is active. */

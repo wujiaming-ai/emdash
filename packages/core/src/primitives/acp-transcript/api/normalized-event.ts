@@ -46,6 +46,8 @@ export type NormalizedEvent =
   | {
       kind: 'message';
       promptId?: string;
+      /** 已由当前控制 turn 接受的补充消息，不结束正在运行的工具。 */
+      continuesTurn?: boolean;
       role: 'user' | 'assistant';
       messageId: string | null;
       text: string;
