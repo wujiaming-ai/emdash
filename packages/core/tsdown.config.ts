@@ -53,6 +53,7 @@ export default defineConfig({
     'runtimes-file-search-api': 'src/runtimes/file-search/api/index.ts',
     'runtimes-file-search-node': 'src/runtimes/file-search/node/index.ts',
     'runtimes-acp-api': 'src/runtimes/acp/api/index.ts',
+    'services-agent-plugins-api-side-question': 'src/services/agent-plugins/api/side-question.ts',
     'runtimes-acp-api-client': 'src/runtimes/acp/api/client.ts',
     'runtimes-acp-api-transport': 'src/runtimes/acp/api/transport.ts',
     'runtimes-acp-node': 'src/runtimes/acp/node/index.ts',

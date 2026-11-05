@@ -318,6 +318,10 @@ export function createConversationsWireController(
         run(input.conversationId, (client) =>
           client.acp.sendPrompt(input, { ...callOptions(meta), timeoutMs: 0 })
         ),
+      sideQuestion: (input, meta) =>
+        run(input.conversationId, (client) =>
+          client.acp.sideQuestion(input, { ...callOptions(meta), timeoutMs: 210_000 })
+        ),
       sendQueuedPromptNow: (input, meta) =>
         run(input.conversationId, (client) =>
           client.acp.sendQueuedPromptNow(input, callOptions(meta))

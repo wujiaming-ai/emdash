@@ -70,6 +70,7 @@ import {
   toAcpImageAttachmentMimeType,
   uploadDroppedFile,
 } from './acp-dropped-file';
+import { AcpSideChatLayout } from './acp-side-chat';
 import { appendDraftCommentsContext } from './draft-comments-context';
 import { buildIssueMentionHiddenContext } from './issue-mention-context';
 import { createTranscriptFileCommands } from './transcript-file-commands';
@@ -871,141 +872,160 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
   const showHero = showComposer && store.isEmpty && store.loadError === null;
 
   return (
-    <div ref={rootRef} className="surface-paper relative h-full overflow-hidden bg-(--em-surface)">
-      <ChatTranscript
-        context={store.chatContext}
-        state={store.chatState}
-        composer="slot"
-        composerPlacement={store.isEmpty ? 'center' : 'bottom'}
-        contentOverlay
-        stickToBottom
-        pinUserMessages
-        onReady={handleReady}
-        commands={transcriptCommands}
-        onAtBottomChange={setAtBottom}
-        style={{ position: 'absolute', inset: 0 }}
-      />
+    <AcpSideChatLayout
+      key={store.conversationId}
+      client={store.session?.sessionState.current().canAskSideQuestion ? store.session : null}
+      onAddToConversation={(text) => {
+        store.composerModel.appendTextBlock(
+          `${text
+            .split('\n')
+            .map((line) => `> ${line}`)
+            .join('\n')}\n\n`
+        );
+        store.composerModel.focus();
+      }}
+    >
+      <div
+        ref={rootRef}
+        className="surface-paper relative h-full overflow-hidden bg-(--em-surface)"
+      >
+        <ChatTranscript
+          context={store.chatContext}
+          state={store.chatState}
+          composer="slot"
+          composerPlacement={store.isEmpty ? 'center' : 'bottom'}
+          contentOverlay
+          stickToBottom
+          pinUserMessages
+          onReady={handleReady}
+          commands={transcriptCommands}
+          onAtBottomChange={setAtBottom}
+          style={{ position: 'absolute', inset: 0 }}
+        />
 
-      {/* Authentication errors own the content area so sign-in remains accessible even after
+        {/* Authentication errors own the content area so sign-in remains accessible even after
           attachment. Otherwise, show the composer as soon as history is known. */}
-      {overlaySlot &&
-        showBlockingOverlay &&
-        createPortal(
-          <div
-            // The library-owned overlay slot is pointer-events: none by design;
-            // opt back in so the Sign in / Retry buttons are clickable.
-            className={`pointer-events-auto absolute inset-0 flex items-center justify-center text-sm text-foreground-muted ${
-              showBlockingOverlay ? 'bg-(--em-surface)' : ''
-            }`}
-            aria-live="polite"
-          >
-            {store.loadError?.kind === 'unavailable' ? (
-              <div className="flex max-w-md flex-col items-center gap-2 px-6 text-center">
-                <span className="text-foreground">Chat unavailable</span>
-                <span className="text-xs text-foreground-muted">{store.loadError.message}</span>
-              </div>
-            ) : store.loadError !== null ? (
-              store.loadError.kind === 'auth_required' ? (
+        {overlaySlot &&
+          showBlockingOverlay &&
+          createPortal(
+            <div
+              // The library-owned overlay slot is pointer-events: none by design;
+              // opt back in so the Sign in / Retry buttons are clickable.
+              className={`pointer-events-auto absolute inset-0 flex items-center justify-center text-sm text-foreground-muted ${
+                showBlockingOverlay ? 'bg-(--em-surface)' : ''
+              }`}
+              aria-live="polite"
+            >
+              {store.loadError?.kind === 'unavailable' ? (
                 <div className="flex max-w-md flex-col items-center gap-2 px-6 text-center">
-                  <span className="text-foreground">
-                    {agent?.name ?? 'This agent'} needs you to sign in.
-                  </span>
-                  <span className="text-xs text-foreground-muted">
-                    {cliAuthMethod?.description ?? store.loadError.message}
-                  </span>
-                  <div className="mt-1 flex gap-2">
-                    {cliAuthMethod && (
-                      <Button variant="primary" size="sm" onClick={openSignInModal}>
-                        Sign in
-                      </Button>
-                    )}
-                    <Button variant="secondary" size="sm" onClick={() => store.retry()}>
-                      Retry
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex max-w-md flex-col items-center gap-2 px-6 text-center">
-                  <span className="text-foreground">Failed to load chat.</span>
+                  <span className="text-foreground">Chat unavailable</span>
                   <span className="text-xs text-foreground-muted">{store.loadError.message}</span>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    className="mt-1"
-                    onClick={() => store.retry()}
-                  >
-                    Retry
-                  </Button>
-                  {store.loadError.kind === 'session_not_found' && (
+                </div>
+              ) : store.loadError !== null ? (
+                store.loadError.kind === 'auth_required' ? (
+                  <div className="flex max-w-md flex-col items-center gap-2 px-6 text-center">
+                    <span className="text-foreground">
+                      {agent?.name ?? 'This agent'} needs you to sign in.
+                    </span>
+                    <span className="text-xs text-foreground-muted">
+                      {cliAuthMethod?.description ?? store.loadError.message}
+                    </span>
+                    <div className="mt-1 flex gap-2">
+                      {cliAuthMethod && (
+                        <Button variant="primary" size="sm" onClick={openSignInModal}>
+                          Sign in
+                        </Button>
+                      )}
+                      <Button variant="secondary" size="sm" onClick={() => store.retry()}>
+                        Retry
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex max-w-md flex-col items-center gap-2 px-6 text-center">
+                    <span className="text-foreground">Failed to load chat.</span>
+                    <span className="text-xs text-foreground-muted">{store.loadError.message}</span>
                     <Button
                       variant="secondary"
                       size="sm"
-                      onClick={() => store.retry({ mode: 'fresh' })}
+                      className="mt-1"
+                      onClick={() => store.retry()}
                     >
-                      Start fresh session
+                      Retry
                     </Button>
-                  )}
-                </div>
-              )
-            ) : (
-              'Loading chat...'
-            )}
-          </div>,
-          overlaySlot
+                    {store.loadError.kind === 'session_not_found' && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => store.retry({ mode: 'fresh' })}
+                      >
+                        Start fresh session
+                      </Button>
+                    )}
+                  </div>
+                )
+              ) : (
+                'Loading chat...'
+              )}
+            </div>,
+            overlaySlot
+          )}
+
+        {showHero &&
+          heroSlot &&
+          createPortal(
+            <div className="px-4 text-center">
+              <h1 className="text-2xl tracking-tight text-foreground">
+                What are we building today?
+              </h1>
+            </div>,
+            heroSlot
+          )}
+
+        {showComposer && composerSlot && (
+          <ComposerForStore
+            key={store.conversationId}
+            store={store}
+            composerSlot={composerSlot}
+            onViewerOpen={handleViewerOpen}
+          />
         )}
 
-      {showHero &&
-        heroSlot &&
-        createPortal(
-          <div className="px-4 text-center">
-            <h1 className="text-2xl tracking-tight text-foreground">What are we building today?</h1>
-          </div>,
-          heroSlot
-        )}
+        {showComposer &&
+          composerSlot &&
+          !atBottom &&
+          createPortal(
+            <div className="pointer-events-none absolute inset-x-0 bottom-full mb-2 flex justify-center">
+              <Button
+                variant="secondary"
+                icon
+                aria-label="Scroll to bottom"
+                onClick={() => viewRef.current?.scrollToBottom({ behavior: 'smooth' })}
+                className="pointer-events-auto rounded-full shadow-md"
+              >
+                <ArrowDown />
+              </Button>
+            </div>,
+            composerSlot
+          )}
 
-      {showComposer && composerSlot && (
-        <ComposerForStore
-          key={store.conversationId}
-          store={store}
-          composerSlot={composerSlot}
-          onViewerOpen={handleViewerOpen}
+        <ImageViewerDialog
+          open={!!viewer}
+          onOpenChange={(open) => {
+            if (!open) setViewer(null);
+          }}
+          src={viewer?.src}
+          alt={viewer?.alt}
         />
-      )}
-
-      {showComposer &&
-        composerSlot &&
-        !atBottom &&
-        createPortal(
-          <div className="pointer-events-none absolute inset-x-0 bottom-full mb-2 flex justify-center">
-            <Button
-              variant="secondary"
-              icon
-              aria-label="Scroll to bottom"
-              onClick={() => viewRef.current?.scrollToBottom({ behavior: 'smooth' })}
-              className="pointer-events-auto rounded-full shadow-md"
-            >
-              <ArrowDown />
-            </Button>
-          </div>,
-          composerSlot
-        )}
-
-      <ImageViewerDialog
-        open={!!viewer}
-        onOpenChange={(open) => {
-          if (!open) setViewer(null);
-        }}
-        src={viewer?.src}
-        alt={viewer?.alt}
-      />
-      <MermaidViewerDialog
-        open={!!mermaidViewer}
-        onOpenChange={(open) => {
-          if (!open) setMermaidViewer(null);
-        }}
-        svg={mermaidViewer?.svg ?? null}
-      />
-    </div>
+        <MermaidViewerDialog
+          open={!!mermaidViewer}
+          onOpenChange={(open) => {
+            if (!open) setMermaidViewer(null);
+          }}
+          svg={mermaidViewer?.svg ?? null}
+        />
+      </div>
+    </AcpSideChatLayout>
   );
 });
 

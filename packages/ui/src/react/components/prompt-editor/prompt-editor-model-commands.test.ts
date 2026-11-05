@@ -19,6 +19,18 @@ describe('PromptEditorModel ownership', () => {
     model.dispose();
   });
 
+  it('appends blocks before a view exists and treats empty input as a no-op', () => {
+    const model = new PromptEditorModel();
+    model.appendTextBlock('first');
+    expect(model.getText()).toBe('first');
+    model.appendTextBlock('second\nline');
+    expect(model.getText()).toBe('first\n\nsecond\nline');
+    const snapshot = model.getSnapshot();
+    model.appendTextBlock('');
+    expect(model.getSnapshot()).toBe(snapshot);
+    model.dispose();
+  });
+
   it('keeps snapshot identity stable until something actually changes', () => {
     const model = new PromptEditorModel({ text: 'draft' });
     const snapshot = model.getSnapshot();

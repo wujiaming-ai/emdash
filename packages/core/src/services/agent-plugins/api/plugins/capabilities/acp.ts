@@ -22,6 +22,10 @@ import { definePluginCapability } from '@emdash/shared/plugins';
 import z from 'zod';
 import type { EnrichHook } from '#primitives/acp-transcript/api';
 import type { CommandSpec } from '#primitives/exec/api';
+import type {
+  SideQuestionInput,
+  SideQuestionResult,
+} from '#services/agent-plugins/api/side-question';
 
 export type AcpSpawnContext = {
   /** Absolute path to the worktree / task directory. */
@@ -55,6 +59,8 @@ export interface AcpAgentApi {
   loadSession?(params: LoadSessionRequest): Promise<LoadSessionResponse>;
   prompt(params: PromptRequest): Promise<PromptResponse>;
   cancel(params: CancelNotification): Promise<void>;
+  /** 独立旁支请求，不进入主会话 prompt 队列。 */
+  sideQuestion?(params: SideQuestionInput & { sessionId: string }): Promise<SideQuestionResult>;
   /** 将补充消息交给当前 turn；false 表示调用方应保留普通队列。 */
   steerPrompt?(params: PromptRequest, priority: 'now' | 'next'): Promise<boolean>;
   /** Optional — only available when the agent advertises the `setSessionConfigOption` capability. */

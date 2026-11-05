@@ -203,6 +203,19 @@ export class PromptEditorModel implements PromptEditorRef {
     }
   }
 
+  /** 追加引用等纯文本块，保留已有 mention 节点和编辑历史。 */
+  appendTextBlock(text: string): void {
+    if (!text) return;
+    const editor = this.ensureEditor();
+    const document = plainTextDoc(text);
+    if (editor.isEmpty) editor.commands.setContent(document, { emitUpdate: true });
+    else
+      editor.commands.insertContentAt(editor.state.doc.content.size, [
+        { type: 'paragraph' },
+        ...(document.content ?? []),
+      ]);
+  }
+
   clear(): void {
     if (this.editor) this.editor.commands.clearContent(true);
     else this.setText('');

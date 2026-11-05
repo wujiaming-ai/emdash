@@ -114,6 +114,10 @@ const conversationsAcpContract = defineContract({
     acpApiContract.sendPrompt.input,
     acpApiContract.sendPrompt.output
   ),
+  sideQuestion: runtimeFallibleProcedure(
+    acpApiContract.sideQuestion.input,
+    acpApiContract.sideQuestion.output
+  ),
   sendQueuedPromptNow: runtimeFallibleProcedure(
     acpApiContract.sendQueuedPromptNow.input,
     acpApiContract.sendQueuedPromptNow.output

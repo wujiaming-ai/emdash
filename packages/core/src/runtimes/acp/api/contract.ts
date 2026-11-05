@@ -9,6 +9,7 @@ import {
 } from '#runtimes/acp/api/models/config';
 import { planStateSchema } from '#runtimes/acp/api/models/plan';
 import { sessionStateSchema, sessionSummarySchema } from '#runtimes/acp/api/models/session';
+import { sideQuestionSchema } from '#services/agent-plugins/api/side-question';
 import {
   acpCancelTurnErrorSchema,
   acpChangeQueuePromptOrderErrorSchema,
@@ -72,6 +73,11 @@ export const acpApiContract = defineContract({
   sendPrompt: fallible({
     input: sendPromptCommandSchema,
     data: sendPromptResponseSchema,
+    error: acpSendPromptErrorSchema,
+  }),
+  sideQuestion: fallible({
+    input: sideQuestionSchema.and(z.object({ conversationId: z.string() })),
+    data: z.object({ text: z.string() }),
     error: acpSendPromptErrorSchema,
   }),
   sendQueuedPromptNow: fallible({

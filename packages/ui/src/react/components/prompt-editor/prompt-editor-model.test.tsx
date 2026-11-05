@@ -30,6 +30,25 @@ describe('conversation-owned prompt editor models', () => {
     expect(editor.isDestroyed).toBe(true);
   });
 
+  it('appends a plain-text block without flattening existing mentions or interpreting HTML', () => {
+    const model = new PromptEditorModel({ text: 'Existing draft' });
+    const result = render(<PromptEditor model={model} />);
+    const editor = editorIn(result.container);
+    act(() =>
+      model.insertMention({ id: 'file-1', kind: 'file', label: 'src/main.ts', name: 'main.ts' })
+    );
+    const before = model.getText();
+    const mention = editor.state.doc
+      .toJSON()
+      .content?.[0]?.content?.find((node: { type: string }) => node.type === 'mention');
+    act(() => model.appendTextBlock('> <img src=x> quoted text'));
+    expect(model.getText()).toBe(`${before}\n\n> <img src=x> quoted text`);
+    expect(editor.state.doc.toJSON().content?.[0]?.content).toContainEqual(mention);
+    expect(result.container.querySelector('img')).toBeNull();
+    result.unmount();
+    model.dispose();
+  });
+
   it('updates view options without reattaching the editor or resetting its history', () => {
     const model = new PromptEditorModel({ text: 'draft' });
     const oldChange = vi.fn();
