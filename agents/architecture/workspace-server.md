@@ -284,3 +284,41 @@ The desktop forwards the read-only agent hook-status procedure to the selected h
 | [`apps/emdash-desktop/src/core/services/hosts/`](../../apps/emdash-desktop/src/core/services/hosts/) | Desktop orchestration and lifecycle policy for SSH hosts |
 | [`apps/emdash-desktop/src/core/services/hosts/node/workspace-server/`](../../apps/emdash-desktop/src/core/services/hosts/node/workspace-server/) | Wire connection manager, hosted-script installer, daemon control, and provisioner |
 | [`apps/workspace-server/install.sh`](../../apps/workspace-server/install.sh) | Remote platform detection and atomic pinned-artifact installation |
+
+## Remote file downloads (protocol 12.4)
+
+The remote file tree's **Download…** action uses the existing Wire connection through SSH.
+`files.transfer.inspect/list/read` is separate from the bounded preview `fs.readBytes` API;
+preview limits and existing editor/agent behavior remain unchanged. The remote service's
+OS permissions remain the read boundary. Older servers return an actionable update error.
+
+A read request is bounded to 4 MiB and names a byte offset and source version. Each response
+includes a SHA-256 digest. Source versions include device/inode, size, nanosecond modification
+and change times, and mode; the server checks them before and after reading. The desktop
+checks range, length, version and checksum before writing. Directory listings stream over
+Wire and spool to local disk before child files are downloaded, preserving empty directories
+without holding a remote stream open while transferring a large child.
+
+The desktop chooses the destination through a native dialog. Downloads run as cancellable
+Wire jobs with progress. Private `.emdash-download-*` directories hold partial files,
+constant-size per-file checkpoints (verified offset and prefix digest), and an exclusive
+process lock. Pause/disconnect leaves checkpoints intact. Selecting the same sources,
+destination and conflict policy resumes after an app restart; the local prefix is rehashed
+before reuse. A changed source or corrupted partial file requires discarding and restarting.
+Only the completed, verified temporary file is committed; a new target uses an exclusive
+hard link and replacement uses rename after rechecking the original target fingerprint.
+Recovery also handles a process exit between commit and checkpoint completion.
+
+Conflict policies are keep-both (default), skip-existing and replace-after-download. Existing
+files survive failed transfers. Discard removes only private partial state, retaining completed
+files. Local destination symlinks and unsafe/colliding filenames are rejected. Remote symlinks
+and special files are skipped with a visible count and up to 20 diagnostic examples; they are
+never recursively followed. File modification times and ordinary permission bits are copied;
+new directories retain owner access, and merging does not change an existing directory's
+permissions. Ownership, ACLs, xattrs and hard-link identity are not replicated.
+
+This is a download feature, not a synchronizer: no upload, automatic reconnect retry, or
+cross-host move is added. Requests have 60-second limits; directory traversal is limited to
+128 nested levels and 100,000 entries per directory. These limits fail explicitly. Files are
+not subject to preview truncation. The UI is remote-only; the main-process transfer service
+uses the host runtime broker and does not add an SSH/SFTP connection lifecycle.

@@ -1,6 +1,7 @@
 import type { ContractImpl } from '@emdash/wire/rpc';
 import { filesContract, type FilesContract } from '#runtimes/files/api';
 import type { FilesRuntime } from '#runtimes/files/node/files-runtime';
+import { inspectTransfer, listTransfer, readTransfer } from '../fs/transfer';
 
 export type FilesProcedures = ContractImpl<FilesContract>;
 
@@ -9,6 +10,11 @@ export function createFilesProcedures(
   contract: FilesContract = filesContract
 ): FilesProcedures {
   return {
+    transfer: {
+      inspect: inspectTransfer,
+      list: listTransfer,
+      read: (input, meta) => readTransfer(input, meta.signal),
+    },
     getHomeDir: () => runtime.getHomeDir(),
     fs: {
       stat: (input) => runtime.fs.stat(input),

@@ -36,6 +36,7 @@ import {
   writeContentInputSchema,
   writeFileInputSchema,
 } from './schemas';
+import { fileTransferContract } from './transfer';
 
 export const MAX_FILE_UPLOAD_BYTES = 10 * 1024 * 1024;
 
@@ -46,6 +47,7 @@ export const MAX_FILE_UPLOAD_BYTES = 10 * 1024 * 1024;
  * external changes only.
  */
 export const filesContract = defineContract({
+  transfer: fileTransferContract,
   getHomeDir: procedure({
     input: z.void().optional(),
     output: homeDirectoryResultSchema,
