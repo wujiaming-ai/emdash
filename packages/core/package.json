@@ -395,6 +395,11 @@
       "development": "./src/runtimes/lsp/node/index.ts",
       "types": "./dist/runtimes-lsp-node.d.mts",
       "default": "./dist/runtimes-lsp-node.mjs"
+    },
+    "./services/agent-plugins/api/side-question": {
+      "development": "./src/services/agent-plugins/api/side-question.ts",
+      "types": "./dist/services-agent-plugins-api-side-question.d.mts",
+      "default": "./dist/services-agent-plugins-api-side-question.mjs"
     }
   },
   "scripts": {

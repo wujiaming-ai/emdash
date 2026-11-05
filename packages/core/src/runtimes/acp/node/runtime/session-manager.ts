@@ -51,6 +51,10 @@ import {
   type RetainedPresentation,
   type SessionsListModel,
 } from '#runtimes/acp/node/state/live-models';
+import type {
+  SideQuestionInput,
+  SideQuestionResult,
+} from '#services/agent-plugins/api/side-question';
 import type { SessionIntent } from '#services/session-intents/api';
 import type {
   ActivityFields,
@@ -397,6 +401,26 @@ export class SessionManager {
         }
       }
       return await lease.value.cell.prompt(input.prompt, acceptance);
+    } finally {
+      await lease.release();
+    }
+  }
+
+  async sideQuestion(
+    conversationId: string,
+    input: SideQuestionInput
+  ): Promise<Result<SideQuestionResult, AcpSendPromptError>> {
+    const record = this.readyRecord(conversationId);
+    if (!record) return acpErr.conversationNotFound(conversationId);
+    const entry = this.retained.get(conversationId);
+    if (!entry) return acpErr.conversationNotFound(conversationId);
+    const acquired = await entry.acquire();
+    if (!acquired.success) return acpErr.invalidState('The main session is unavailable');
+    const lease = acquired.data;
+    try {
+      // 持有当前会话租约，避免旁支请求期间被空闲回收；不改变主任务状态。
+      if (lease.value !== record) return acpErr.invalidState('The main session has changed');
+      return await record.cell.sideQuestion(input);
     } finally {
       await lease.release();
     }

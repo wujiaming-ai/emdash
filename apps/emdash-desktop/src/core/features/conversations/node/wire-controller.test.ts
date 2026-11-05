@@ -499,6 +499,31 @@ describe('createConversationsWireController', () => {
     }
   );
 
+  it.each([LOCAL_HOST_REF, hostRef('remote', 'side-server')])(
+    'routes side questions to the selected host %j without touching main prompt controls',
+    async (host) => {
+      const sideQuestion = vi.fn(async () => ok({ text: 'side answer' }));
+      const cancelTurn = vi.fn();
+      const sendPrompt = vi.fn();
+      const controller = setupController({
+        host,
+        client: { acp: { sideQuestion, cancelTurn, sendPrompt } },
+      });
+      const input = {
+        conversationId: target.conversationId,
+        sideId: crypto.randomUUID(),
+        action: 'ask' as const,
+        question: 'Why?',
+      };
+      await expect(controller.call('acp.sideQuestion', input)).resolves.toEqual(
+        ok({ text: 'side answer' })
+      );
+      expect(sideQuestion).toHaveBeenCalledWith(input, { timeoutMs: 210_000 });
+      expect(cancelTurn).not.toHaveBeenCalled();
+      expect(sendPrompt).not.toHaveBeenCalled();
+    }
+  );
+
   it('allows activation to finish before acknowledging prompt acceptance', async () => {
     const sendPrompt = vi.fn(async () => ok({ queued: false }));
     const controller = setupController({

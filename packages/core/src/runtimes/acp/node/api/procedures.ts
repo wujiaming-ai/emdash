@@ -21,6 +21,10 @@ import { acpErr } from '#runtimes/acp/api';
 import type { AcpSetOptionResult } from '#runtimes/acp/api/schemas';
 import type { AcpRuntime } from '#runtimes/acp/node/runtime/runtime';
 import { isAcpWakeFailure, type AcpWakeFailure } from '#runtimes/acp/node/runtime/session-manager';
+import type {
+  SideQuestionInput,
+  SideQuestionResult,
+} from '#services/agent-plugins/api/side-question';
 
 export type SessionDescriptorInput = AcpStartInputWire;
 
@@ -50,6 +54,12 @@ export function createAcpProcedures(runtime: AcpRuntime) {
         input.placement,
         input.promptId
       );
+    },
+    sideQuestion(
+      input: SideQuestionInput & { conversationId: string }
+    ): Promise<Result<SideQuestionResult, AcpSendPromptError>> {
+      const { conversationId, ...question } = input;
+      return runtime.sideQuestion(conversationId, question);
     },
     sendQueuedPromptNow(input: {
       conversationId: string;

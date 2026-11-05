@@ -22,6 +22,26 @@ codex, claude, opencode, grok, devin, qwen, qoder, droid, cursor, copilot, herme
 - prompt delivery behavior
 - auto-approve, ACP, hooks, MCP, model, session, trust, and plugin capabilities
 
+## Codex Side Chat
+
+Codex's bundled ACP adapter advertises `emdash.dev/side-question: 1`; Core projects this
+as the optional `canAskSideQuestion` session capability. The desktop uses a separate Wire
+`acp.sideQuestion` procedure on both local and remote hosts. Other providers do not advertise
+this capability and keep their existing prompt behavior. Remote hosts need protocol 12.5.
+
+Selecting transcript text opens the shared Emdash popover with draft-insertion and side-chat
+actions. A side chat forks the last completed main context into an ephemeral Codex thread;
+selected text supplies context from an active turn. Follow-ups reuse that child. Answers are
+shown after completion, without appending to the main transcript; adding an answer to the main
+conversation only inserts a draft. The sidebar uses Emdash's resizable panels, buttons,
+textarea, scroll container and Markdown renderer. Narrow panes stack vertically.
+
+The adapter disables tools, MCP, apps, hooks and environment access in the child, uses
+read-only sandboxing and never approves requests. Side cancel interrupts only the child;
+close, session teardown and timeouts release it. Unsupported ephemeral forks fail closed
+and archive only the newly created child. Keep the Codex side-question tests and adapter
+bundle validation passing when upgrading `@agentclientprotocol/codex-acp`.
+
 ## Agent Hooks And Notifications
 
 Claude ACP is patched through `pnpm.patchedDependencies` to resolve

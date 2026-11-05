@@ -13,6 +13,10 @@ import {
   type SessionState,
   type TerminalState,
 } from '@emdash/core/runtimes/acp/api/client';
+import type {
+  SideQuestionInput,
+  SideQuestionResult,
+} from '@emdash/core/services/agent-plugins/api/side-question';
 import type { RuntimeResolveError } from '@emdash/core/services/runtime-broker/api';
 import { createEmitter, type Result, type Unsubscribe } from '@emdash/shared';
 import { createScope, type Scope } from '@emdash/shared/concurrency';
@@ -263,6 +267,13 @@ export class AcpLiveSession {
 
   changeQueuePromptOrder(ids: string[]): Promise<Result<void, unknown>> {
     return this.client.changeQueuePromptOrder({ conversationId: this.conversationId, ids });
+  }
+
+  sideQuestion(input: SideQuestionInput): Promise<Result<SideQuestionResult, unknown>> {
+    return this.client.sideQuestion(
+      { ...input, conversationId: this.conversationId },
+      { timeoutMs: 220_000 }
+    );
   }
 
   sendQueuedPromptNow(id: string): Promise<Result<void, unknown>> {

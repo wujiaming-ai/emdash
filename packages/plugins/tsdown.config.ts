@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { resolve } from 'node:path';
 import { defineConfig } from 'tsdown';
 import type { UserConfig } from 'tsdown';
 import { adapterAssets } from './src/agents/adapter-manifest.ts';
@@ -34,6 +35,13 @@ const adapterConfigs: UserConfig[] = adapterAssets.map((asset) => ({
   entry: {
     [`adapters/${asset.name}`]: require.resolve(asset.specifier),
   },
+  // Codex 专属 ACP 扩展与应用源码一起编译，避免复制一份业务实现进补丁。
+  alias:
+    asset.name === 'codex-acp'
+      ? {
+          '@emdash/codex-side-question': resolve('src/agents/impl/codex/side-question-server.ts'),
+        }
+      : undefined,
   format: [asset.format],
   dts: false,
   sourcemap: true,

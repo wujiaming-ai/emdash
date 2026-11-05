@@ -29,6 +29,10 @@ import {
   type AcpConnectionSource,
 } from '#runtimes/acp/node/connection/source';
 import type { SessionLiveModels, SessionsListModel } from '#runtimes/acp/node/state/live-models';
+import type {
+  SideQuestionInput,
+  SideQuestionResult,
+} from '#services/agent-plugins/api/side-question';
 import { SessionManager } from './session-manager';
 import { TerminalLiveRegistry } from './terminal-live-registry';
 import type { AcpRuntimeDeps, AcpStartInput } from './types';
@@ -97,6 +101,13 @@ export class AcpRuntime {
     promptId: string = randomUUID()
   ): Promise<Result<{ queued: boolean }, AcpSendPromptError>> {
     return this.manager.sendPrompt({ conversationId, prompt, placement, promptId });
+  }
+
+  sideQuestion(
+    conversationId: string,
+    input: SideQuestionInput
+  ): Promise<Result<SideQuestionResult, AcpSendPromptError>> {
+    return this.manager.sideQuestion(conversationId, input);
   }
 
   sendQueuedPromptNow(

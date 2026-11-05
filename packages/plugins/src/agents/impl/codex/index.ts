@@ -9,7 +9,6 @@ import {
   homebrewOption,
   npmDependency,
 } from '@emdash/core/services/agent-plugins/api/plugins/helpers';
-import { connectStdioAcp } from '../../helpers/acp-stdio';
 import { resolveAdapterAsset } from '../../helpers/adapter-assets';
 import { authenticatedFromEnv, commandAuthStatus } from '../../helpers/auth';
 import { enrichCodexUpdate } from './acp-enrich';
@@ -18,6 +17,7 @@ import { codexAdapter } from './adapter';
 import { readCodexAuthEnvKeys } from './auth-env';
 import { buildCodexHookConfig } from './hooks';
 import { icon } from './icon';
+import { connectCodexAcp } from './side-question';
 import { probeCodexUsage } from './usage';
 
 export const plugin = definePlugin(
@@ -159,7 +159,7 @@ export const provider = registerPluginBehavior(plugin, {
       },
     }),
     connect: (io, toClient) => {
-      return connectStdioAcp(io, toClient);
+      return connectCodexAcp(io, toClient);
     },
     enrich: enrichCodexUpdate,
     isSessionNotFound: isCodexSessionNotFound,

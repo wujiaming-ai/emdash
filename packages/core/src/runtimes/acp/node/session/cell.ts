@@ -42,6 +42,10 @@ import {
   SessionMachine,
   type SessionMachineContext,
 } from '#runtimes/acp/node/machine/machine';
+import type {
+  SideQuestionInput,
+  SideQuestionResult,
+} from '#services/agent-plugins/api/side-question';
 import { createMachineEffectDriver, type MachineEffectDriver } from '../machine/primitive';
 import type { PromptAcceptance, SessionCellDeps, SessionPromptResult } from './cell-deps';
 import { PermissionBroker } from './permission-broker';
@@ -121,6 +125,7 @@ export class SessionCell {
     const state = this.machine.sessionState();
     return {
       ...state,
+      ...(this.deps.agent.sideQuestion ? { canAskSideQuestion: true } : {}),
       ...(this.deps.agent.steerPrompt ? { canSteer: true } : {}),
       // Partial replay is never an authoritative transcript position.
       transcript: state.lifecycle === 'replaying' ? null : this.transcript.snapshot,
@@ -339,6 +344,22 @@ export class SessionCell {
     }
   }
 
+  private sideId: string | undefined;
+  async sideQuestion(
+    input: SideQuestionInput
+  ): Promise<Result<SideQuestionResult, AcpSendPromptError>> {
+    if (this.disposed || !this.deps.agent.sideQuestion)
+      return acpErr.invalidState(
+        'Side chats are unavailable. Update Codex and the remote service, then reconnect.'
+      );
+    if (input.action === 'ask') this.sideId = input.sideId;
+    try {
+      return ok(await this.deps.agent.sideQuestion({ ...input, sessionId: this.acpSessionId }));
+    } catch (error) {
+      return acpErr.promptFailed(toSerializedError(error));
+    }
+  }
+
   sendQueuedPromptNow(
     id: string,
     priority: 'now' | 'next' = 'now'
@@ -544,6 +565,13 @@ export class SessionCell {
   }
 
   dispose(): void {
+    if (this.sideId && this.deps.agent.sideQuestion) {
+      void this.deps.agent
+        .sideQuestion({ sessionId: this.acpSessionId, sideId: this.sideId, action: 'close' })
+        .catch((error: unknown) => {
+          this.deps.logger.warn('Failed to close side chat', { error });
+        });
+    }
     this.disposed = true;
     this.clearQuiesce();
     this.preparedPromptEffects = null;
