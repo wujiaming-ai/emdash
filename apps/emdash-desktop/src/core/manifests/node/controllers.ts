@@ -28,6 +28,7 @@ import {
 } from '@core/features/dev-perf/node/wire-controller';
 import type { EditorBufferService } from '@core/features/editor/node/editor-buffer-service';
 import { createEditorWireController } from '@core/features/editor/node/wire-controller';
+import { chooseDownloadDirectory } from '@core/features/files/node/downloads/dialog';
 import { createFilesWireController } from '@core/features/files/node/wire-controller';
 import type { GitCredentialsService } from '@core/features/github/api/node/services/git-credentials-service';
 import { createGithubWireController } from '@core/features/github/node/wire-controller';
@@ -217,7 +218,8 @@ export const desktopNodeControllers = {
       }),
   },
   files: {
-    create: ({ runtimes }) => createFilesWireController({ runtimes }),
+    create: ({ runtimes }) =>
+      createFilesWireController({ runtimes, chooseDirectory: chooseDownloadDirectory }),
   },
   legacyPort: {
     create: ({ legacyPortOperations }) => createLegacyPortWireController(legacyPortOperations),

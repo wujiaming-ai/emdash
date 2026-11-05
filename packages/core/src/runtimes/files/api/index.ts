@@ -86,3 +86,10 @@ export {
 } from '#runtimes/files/api/listing/state';
 
 export { filesWorker } from './worker';
+
+export {
+  TRANSFER_BLOCK_BYTES,
+  fileTransferContract,
+  transferEntrySchema,
+  type TransferEntry,
+} from './transfer';

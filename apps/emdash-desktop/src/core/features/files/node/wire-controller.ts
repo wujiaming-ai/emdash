@@ -32,11 +32,13 @@ import { createController, type CallMeta, type Controller } from '@emdash/wire/r
 import { cell, derived, expose, remote, snapshot, type Readable } from '@emdash/wire/state';
 import { forwardModelMutation } from '@core/services/runtime-clients/node/forward-live-model';
 import { filesWireContract, type FilesContentKey } from '../api';
+import { FileDownloads } from './downloads/service';
 
 export type FilesRuntimeBroker = Pick<RuntimeBroker, 'client'>;
 
 export type CreateFilesWireControllerOptions = Readonly<{
   runtimes: FilesRuntimeBroker;
+  chooseDirectory?: () => Promise<string | undefined>;
 }>;
 
 /**
@@ -46,7 +48,13 @@ export type CreateFilesWireControllerOptions = Readonly<{
  * resolution happens anywhere on this path (spec §2/§8).
  */
 export function createFilesWireController(options: CreateFilesWireControllerOptions): Controller {
+  const downloads = new FileDownloads(options);
   return createController(filesWireContract, {
+    downloads: {
+      prepare: (input) => downloads.prepare(input),
+      run: { run: (input, context) => downloads.run(input.id, context) },
+      discard: (input) => downloads.discard(input.id),
+    },
     fs: {
       exists: (input, meta) =>
         withFileRuntime(options, input.uri, (files, ref) =>

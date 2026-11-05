@@ -41,6 +41,7 @@ import { observer } from 'mobx-react-lite';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import type { RenderableFileNode } from '@core/features/editor/api/browser/file-tree/tree-utils';
 import type { FileTabResource } from '@core/features/editor/api/browser/task-editor/stores/file-tab-resource';
+import { downloadMenuItem } from '@core/features/editor/browser/file-tree/download-menu';
 import {
   buildFileTreeGitDecorations,
   type FileTreeGitDecorations,
@@ -715,6 +716,9 @@ export const EditorFileTree = observer(function EditorFileTree() {
         icon: <Copy size={14} />,
         onSelect: () => void copyRelativePath(node),
       }
+    );
+    items.push(
+      ...downloadMenuItem(workspace.sshConnectionId, node, selection, liveActionsDisabled)
     );
     if (!workspace.sshConnectionId) {
       items.push({

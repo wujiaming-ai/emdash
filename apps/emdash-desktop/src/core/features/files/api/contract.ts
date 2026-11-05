@@ -12,6 +12,7 @@ import {
   runtimeFallibleProcedure,
   runtimeResolveErrorUnion,
 } from '@core/primitives/desktop-runtime/api/fallible-contract';
+import { downloadsContract } from './downloads';
 
 // Every key in this domain is a ResourceUri — a serialized HostFileRef carrying
 // the host and the absolute path (spec §2/§8). Workspace→root resolution happens
@@ -76,6 +77,7 @@ const filesFsContract = defineContract({
 export const filesDomain = 'files' as const;
 
 export const filesWireContract = defineContract({
+  downloads: downloadsContract,
   fs: filesFsContract,
   listing: liveModel({
     key: listingKeySchema,
