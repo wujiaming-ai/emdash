@@ -103,7 +103,20 @@ export function createConversationsWireController(
     hostIsReachable: options.hostIsReachable,
     workspaceIdentity: options.workspaceIdentity,
   });
-  const target = (conversationId: string) => resolveTarget(conversationId);
+  const sideTargets = new Map<string, ConversationRuntimeTarget>();
+  const sideLifecycle = createKeyedLanes();
+  const closingSides = new Set<string>();
+  const withSideLifecycle = <T>(id: string, meta: CallMeta, work: () => Promise<T>): Promise<T> =>
+    id.startsWith('side:')
+      ? sideLifecycle.run(id, meta.signal ?? new AbortController().signal, work)
+      : work();
+  const target = async (conversationId: string): Promise<ConversationRuntimeTarget> => {
+    if (closingSides.has(conversationId)) throw new Error('This temporary side chat is closing.');
+    const side = sideTargets.get(conversationId);
+    if (side) return side;
+    if (conversationId.startsWith('side:')) throw new Error('This temporary side chat has closed.');
+    return resolveTarget(conversationId);
+  };
   const run = <T, E>(
     conversationId: string,
     work: (
@@ -205,6 +218,45 @@ export function createConversationsWireController(
       conversationOperations.deleteHostConversation(conversationId),
     events: conversationWireEvents,
     acp: {
+      openSideSession: async ({ conversationId, sideId }) => {
+        const parent = await resolveTarget(conversationId);
+        requireAttachedProjectOrThrow(options.projects, parent.projectId);
+        if (parent.providerId !== 'codex' || !parent.acpInput)
+          throw new Error('This conversation does not support side chat.');
+        const id = `side:${sideId}`;
+        const existing = sideTargets.get(id);
+        if (existing && existing.acpInput?.sideParentConversationId !== conversationId)
+          throw new Error('Side chat belongs to another conversation.');
+        if (!existing)
+          sideTargets.set(id, {
+            ...parent,
+            conversationId: id,
+            sessionId: null,
+            acpInput: {
+              ...parent.acpInput,
+              conversationId: id,
+              sessionId: null,
+              initialQueue: undefined,
+              sideParentConversationId: conversationId,
+            },
+          });
+        return { conversationId: id };
+      },
+      closeSideSession: async ({ conversationId }, meta) =>
+        withSideLifecycle(conversationId, meta, async () => {
+          if (!sideTargets.has(conversationId)) return ok();
+          const side = await target(conversationId);
+          closingSides.add(conversationId);
+          try {
+            const result = await withConversationRuntime(options, Promise.resolve(side), (client) =>
+              client.acp.terminate({ conversationId }, callOptions(meta))
+            );
+            if (result.success) sideTargets.delete(conversationId);
+            return result;
+          } finally {
+            closingSides.delete(conversationId);
+          }
+        }),
       setOption: (input, meta) =>
         configurationChanges.run(
           input.conversationId,
@@ -215,6 +267,9 @@ export function createConversationsWireController(
               options,
               Promise.resolve(runtimeTarget),
               async (client): ReturnType<ConversationsHostRuntimesClient['acp']['setOption']> => {
+                // 旁支设置只更新自身的运行时，不写主会话或全局偏好。
+                if (runtimeTarget.acpInput?.sideParentConversationId)
+                  return client.acp.setOption(input, callOptions(meta));
                 const records = await client.conversations.records
                   .state(undefined, 'list')
                   .snapshot();
@@ -290,25 +345,35 @@ export function createConversationsWireController(
             );
           }
         ),
-      attach: async ({ conversationId }, meta) => {
-        const runtimeTarget = await target(conversationId);
-        const input = runtimeTarget.acpInput;
-        if (!input) throw missingAcpInputError(runtimeTarget);
-        return withConversationRuntime(options, Promise.resolve(runtimeTarget), (client) =>
-          client.acp.attach(input, callOptions(meta))
-        );
-      },
+      attach: async ({ conversationId }, meta) =>
+        withSideLifecycle(conversationId, meta, async () => {
+          const runtimeTarget = await target(conversationId);
+          const input = runtimeTarget.acpInput;
+          if (!input) throw missingAcpInputError(runtimeTarget);
+          return withConversationRuntime(options, Promise.resolve(runtimeTarget), (client) =>
+            client.acp.attach(input, callOptions(meta))
+          );
+        }),
       startSession: async ({ conversationId, mode }, meta) => {
         const runtimeTarget = await target(conversationId);
         const input = runtimeTarget.acpInput;
         if (!input) throw missingAcpInputError(runtimeTarget);
-        return withConversationRuntime(options, Promise.resolve(runtimeTarget), async (client) => {
-          const result = await client.acp.startSession(
-            { ...input, mode },
-            { ...callOptions(meta), timeoutMs: 0 }
-          );
-          return result;
-        });
+        return withConversationRuntime(
+          options,
+          Promise.resolve(runtimeTarget),
+          async (client): Promise<Awaited<ReturnType<typeof client.acp.startSession>>> => {
+            if (
+              conversationId.startsWith('side:') &&
+              (closingSides.has(conversationId) || !sideTargets.has(conversationId))
+            )
+              return acpErr.invalidState('This temporary side chat has closed.');
+            const result = await client.acp.startSession(
+              { ...input, mode },
+              { ...callOptions(meta), timeoutMs: 0 }
+            );
+            return result;
+          }
+        );
       },
       loadHistory: (input, meta) =>
         run(input.conversationId, (client) => client.acp.loadHistory(input, callOptions(meta))),

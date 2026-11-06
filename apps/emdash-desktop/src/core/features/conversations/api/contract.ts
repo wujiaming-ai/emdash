@@ -101,6 +101,11 @@ const desktopTuiSessions = liveModel({
 });
 
 const conversationsAcpContract = defineContract({
+  openSideSession: procedure({
+    input: conversationKey.extend({ sideId: z.string().uuid() }),
+    output: z.object({ conversationId: z.string() }),
+  }),
+  closeSideSession: runtimeFallibleProcedure(conversationKey, acpApiContract.terminate.output),
   attach: runtimeFallibleProcedure(conversationKey, acpApiContract.attach.output),
   startSession: runtimeFallibleProcedure(
     conversationKey.extend({ mode: acpSessionStartModeSchema }),

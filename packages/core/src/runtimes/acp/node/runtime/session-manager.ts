@@ -149,6 +149,7 @@ export class SessionManager {
       (conversationId) => this.lifecycle.activity(conversationId)
     );
     this.materializer = new SessionMaterializer(deps, connections, {
+      sideParent: (id) => this.readyRecord(id) ?? null,
       isCurrent: (entry, epoch) => entry.isEpochCurrent(epoch),
       onRecordCreated: (record, scope) => {
         record.conversation.attachProvisional(record);
@@ -191,7 +192,22 @@ export class SessionManager {
       ],
       conversation: {
         intents: deps.intents,
-        reports: deps.conversationReports,
+        reports: {
+          sessionStarted: (input) => {
+            if (!this.isSideSession(input.conversationId))
+              deps.conversationReports?.sessionStarted(input);
+          },
+          providerSessionId: (input) => {
+            if (!this.isSideSession(input.conversationId))
+              deps.conversationReports?.providerSessionId(input);
+          },
+          activity: (id) => {
+            if (!this.isSideSession(id)) deps.conversationReports?.activity(id);
+          },
+          sessionEnded: (id) => {
+            if (!this.isSideSession(id)) deps.conversationReports?.sessionEnded(id);
+          },
+        },
         activePayload: (conversationId) => this.activeIntentPayload(conversationId),
       },
     });
@@ -380,7 +396,10 @@ export class SessionManager {
           onAccepted,
           resolvedAttachments: await Promise.all(
             (input.prompt.attachments ?? []).map((attachment) =>
-              this.deps.resolveAttachment(input.conversationId, attachment)
+              this.deps.resolveAttachment(
+                entry.descriptor.sideParentConversationId ?? input.conversationId,
+                attachment
+              )
             )
           ),
         };
@@ -482,6 +501,12 @@ export class SessionManager {
   }
 
   async kill(conversationId: string): Promise<Result<void, AcpTerminateError>> {
+    for (const child of this.retained.values()) {
+      if (child.descriptor.sideParentConversationId === conversationId) {
+        const result = await this.kill(child.conversationId);
+        if (!result.success) return result;
+      }
+    }
     const entry = this.retained.get(conversationId);
     if (entry) {
       this.removeSuspendedIntentEntry(conversationId);
@@ -819,7 +844,13 @@ export class SessionManager {
         listProjector: this.listProjector,
         terminals: this.terminals,
         saveIntent: () => this.lifecycle.saveIntent(input.conversationId),
-        persistIntent: (prepare) => this.lifecycle.persistIntent(input.conversationId, prepare),
+        persistIntent: async (prepare) => {
+          if (!input.sideParentConversationId)
+            return this.lifecycle.persistIntent(input.conversationId, prepare);
+          // 保留普通会话状态机的提交回调，但临时旁支不写入恢复记录。
+          prepare()?.onPersisted?.();
+          return ok();
+        },
         materialize: (scope) => this.startActivation(entry, scope),
         interruptRecord: (record) => this.interruptRecord(record),
         onActivated: (record) => {
@@ -865,6 +896,10 @@ export class SessionManager {
     if (options.suspended) entry.initializeSuspended();
     this.removeSuspendedIntentEntry(input.conversationId);
     return entry;
+  }
+
+  private isSideSession(conversationId: string): boolean {
+    return Boolean(this.retained.get(conversationId)?.descriptor.sideParentConversationId);
   }
 
   private parseIntent(intent: SessionIntent): SuspendedIntentEntry | null {
@@ -915,7 +950,9 @@ export class SessionManager {
   }
 
   private activeIntentPayload(conversationId: string) {
-    return this.retained.get(conversationId)?.intentPayload() ?? null;
+    return this.isSideSession(conversationId)
+      ? null
+      : (this.retained.get(conversationId)?.intentPayload() ?? null);
   }
 
   private async sanitizeIntent(

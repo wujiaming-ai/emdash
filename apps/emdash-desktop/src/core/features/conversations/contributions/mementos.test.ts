@@ -10,6 +10,22 @@ describe('ACP draft memento', () => {
     });
   });
 
+  it('roundtrips optional references while accepting existing drafts', () => {
+    const draft = {
+      version: '1' as const,
+      text: 'question',
+      attachments: [],
+      quotes: [{ id: 'quote', text: 'selected text' }],
+    };
+    expect(acpDraftSchema.parseJson(acpDraftSchema.serialize(draft))).toEqual(draft);
+    expect(
+      acpDraftSchema.schema.safeParse({
+        ...draft,
+        quotes: [{ id: 'quote', text: 'a'.repeat(ACP_DRAFT_MAX_LENGTH + 1) }],
+      }).success
+    ).toBe(false);
+  });
+
   it('stores bounded text and attachment refs without attachment bytes', () => {
     const value = {
       version: '1' as const,

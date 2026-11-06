@@ -126,6 +126,7 @@ export class SessionCell {
     return {
       ...state,
       ...(this.deps.agent.sideQuestion ? { canAskSideQuestion: true } : {}),
+      ...(this.deps.agent.forkSideSession ? { canOpenSideSession: true } : {}),
       ...(this.deps.agent.steerPrompt ? { canSteer: true } : {}),
       // Partial replay is never an authoritative transcript position.
       transcript: state.lifecycle === 'replaying' ? null : this.transcript.snapshot,

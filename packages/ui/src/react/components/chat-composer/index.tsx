@@ -203,6 +203,8 @@ export interface ChatComposerProps {
   value?: string;
   /** Override the idle editor placeholder. Disabled/working placeholders still take precedence. */
   placeholder?: string;
+  /** 宿主提供的引用等上下文区域；不改变编辑器和工具栏。 */
+  contextContent?: React.ReactNode;
 
   agentOptions?: ComposerAgentOption[] | null;
   selectedAgent?: string;
@@ -666,6 +668,7 @@ export function ChatComposer({
   showSubmitButton = true,
   value,
   placeholder,
+  contextContent,
   agentOptions,
   selectedAgent,
   onAgentChange,
@@ -931,6 +934,7 @@ export function ChatComposer({
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
+        {contextContent}
         {/* Image attachment previews */}
         {imageAttachments.length > 0 && (
           <div className={styles.attachmentStrip}>

@@ -32,6 +32,7 @@ import { availableHistory, transcriptSnapshot } from './acp-transcript-fixtures'
 type DraftState = {
   version: '1';
   text: string;
+  quotes?: Array<{ id: string; text: string }>;
   attachments: Array<{ id: string; mimeType: 'image/png'; name?: string }>;
 };
 
@@ -43,6 +44,7 @@ const mementoTestState = vi.hoisted(() => ({
 }));
 
 const conversationClientTestState = vi.hoisted(() => ({
+  closeSideSession: vi.fn(async () => ({ success: true })),
   uploadAttachment: vi.fn(),
   downloadAttachment: vi.fn(),
   deleteAttachment: vi.fn(),
@@ -54,6 +56,7 @@ vi.mock('@core/features/conversations/api/browser/chat/shared-chat-context', () 
 
 vi.mock('@core/features/conversations/api/browser/client', () => ({
   getConversationsClient: async () => ({
+    acp: { closeSideSession: conversationClientTestState.closeSideSession },
     attachments: {
       upload: conversationClientTestState.uploadAttachment,
       download: conversationClientTestState.downloadAttachment,
@@ -565,6 +568,90 @@ describe('AcpChatStore prompt submission', () => {
       expect(sendPrompt).toHaveBeenCalledWith({ text: 'hello' }, undefined, expect.any(String))
     );
     expect(store.draftText).toBe('');
+  });
+
+  it('keeps references separate from text and sends an immutable snapshot with other context', async () => {
+    const sendPrompt = vi.fn(async () => ({ success: true, data: { queued: true } }));
+    const store = createStore(idleState(), sendPrompt);
+    store.setDraftText('why');
+    store.addDraftQuote('first\nsecond');
+    expect(store.draftText).toBe('why');
+    const quote = store.draftQuotes[0]!;
+    store.updateDraftQuote(quote.id, 'edited\nsecond');
+    expect(mementoTestState.producer?.().quotes).toEqual(store.draftQuotes);
+    store.submitPrompt('why', [], 'issue context');
+    store.addDraftQuote('next');
+    await vi.waitFor(() => expect(sendPrompt).toHaveBeenCalledOnce());
+    expect(sendPrompt).toHaveBeenCalledWith(
+      { text: 'why', hiddenContext: 'issue context\n\n1. Selected text:\n> edited\n> second' },
+      undefined,
+      expect.any(String)
+    );
+    expect(store.draftQuotes.map((value) => value.text)).toEqual(['next']);
+    store.removeDraftQuote(store.draftQuotes[0]!.id);
+    expect(store.draftQuotes).toEqual([]);
+    store.dispose();
+  });
+
+  it('retains reference context when unrelated issue context resolution fails', async () => {
+    const sendPrompt = vi.fn(async () => ({ success: true, data: { queued: false } }));
+    const store = createStore(idleState(), sendPrompt);
+    store.addDraftQuote('<img src=x>');
+    store.submitPrompt('why', [], Promise.reject(new Error('context unavailable')));
+    await vi.waitFor(() => expect(sendPrompt).toHaveBeenCalledOnce());
+    expect(sendPrompt).toHaveBeenCalledWith(
+      { text: 'why', hiddenContext: '1. Selected text:\n> <img src=x>' },
+      undefined,
+      expect.any(String)
+    );
+    store.dispose();
+  });
+
+  it('restores rejected references without overwriting newly drafted text or references', async () => {
+    const pending = deferred<{
+      success: false;
+      error: { type: 'invalid_state'; message: string };
+    }>();
+    const sendPrompt = vi.fn(() => pending.promise);
+    const store = createStore(idleState(), sendPrompt);
+    store.addDraftQuote('retry reference');
+    store.submitPrompt('why');
+    await vi.waitFor(() => expect(sendPrompt).toHaveBeenCalledOnce());
+    store.setDraftText('next question');
+    store.addDraftQuote('new reference');
+    pending.resolve({ success: false, error: { type: 'invalid_state', message: 'unavailable' } });
+    await vi.waitFor(() =>
+      expect(store.draftQuotes.map((value) => value.text)).toEqual([
+        'retry reference',
+        'new reference',
+      ])
+    );
+    expect(store.draftText).toBe('next question');
+    store.dispose();
+  });
+
+  it('restores persisted references and keeps side references out of main drafts', async () => {
+    mementoTestState.value = {
+      version: '1',
+      text: 'why',
+      attachments: [],
+      quotes: [{ id: 'saved', text: 'saved quote' }],
+    };
+    const store = new AcpChatStore('conversation-1', 'project-1', 'task-1');
+    await vi.waitFor(() =>
+      expect(store.draftQuotes).toEqual([{ id: 'saved', text: 'saved quote' }])
+    );
+    const side = new AcpChatStore('side:test', 'project-1', 'task-1', undefined, {
+      parentConversationId: 'conversation-1',
+      providerId: 'codex',
+    });
+    side.addDraftQuote('side quote');
+    expect(store.draftQuotes[0]!.text).toBe('saved quote');
+    expect(mementoTestState.producer?.().quotes).toEqual(store.draftQuotes);
+    side.removeDraftQuote();
+    expect(side.draftQuotes).toEqual([]);
+    side.dispose();
+    store.dispose();
   });
 
   it('calls onAccepted once the prompt is accepted', async () => {
@@ -1417,6 +1504,67 @@ describe('AcpChatStore prompt submission', () => {
     await vi.waitFor(() => expect(historySeed).toHaveBeenCalledWith(historyPage('replayed').turns));
     expect(transcriptTestState.activeTurnSnapshot?.id).toBe('active');
     store.dispose();
+  });
+  it('does not repeat attachment deletion or side termination after disposal', async () => {
+    conversationClientTestState.uploadAttachment.mockResolvedValue({
+      success: true,
+      data: { id: 'removed', name: 'removed.png', mimeType: 'image/png' },
+    });
+    conversationClientTestState.deleteAttachment.mockResolvedValue({ success: true });
+    conversationClientTestState.closeSideSession.mockClear();
+    const store = new AcpChatStore('side:test', 'project-1', 'task-1', undefined, {
+      parentConversationId: 'conversation-1',
+      providerId: 'codex',
+    });
+    await store.uploadAttachment({
+      name: 'removed.png',
+      mimeType: 'image/png',
+      data: new Uint8Array([1]),
+    });
+    await store.deleteAttachment('removed');
+    store.dispose();
+    store.dispose();
+    await vi.waitFor(() => expect(conversationClientTestState.closeSideSession).toHaveBeenCalled());
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(conversationClientTestState.closeSideSession).toHaveBeenCalledOnce();
+    expect(conversationClientTestState.deleteAttachment).toHaveBeenCalledOnce();
+  });
+
+  it('keeps side drafts out of main mementos and cleans an upload completed after close', async () => {
+    mementoTestState.value = { version: '1', text: 'main draft', attachments: [] };
+    const pending = deferred<{
+      success: true;
+      data: { id: string; name: string; mimeType: 'image/png' };
+    }>();
+    conversationClientTestState.uploadAttachment.mockReturnValue(pending.promise);
+    conversationClientTestState.deleteAttachment.mockResolvedValue({ success: true });
+    const store = new AcpChatStore('side:test', 'project-1', 'task-1', undefined, {
+      parentConversationId: 'conversation-1',
+      providerId: 'codex',
+    });
+    await Promise.resolve();
+    expect(store.draftText).toBe('');
+    store.setDraftText('side draft');
+    expect(mementoTestState.producer).toBeNull();
+    const upload = store.uploadAttachment({
+      name: 'late.png',
+      mimeType: 'image/png',
+      data: new Uint8Array([1]),
+    });
+    await vi.waitFor(() =>
+      expect(conversationClientTestState.uploadAttachment).toHaveBeenCalledOnce()
+    );
+    store.dispose();
+    pending.resolve({
+      success: true,
+      data: { id: 'late', name: 'late.png', mimeType: 'image/png' },
+    });
+    expect(await upload).toBeNull();
+    expect(conversationClientTestState.deleteAttachment).toHaveBeenCalledWith({
+      conversationId: 'conversation-1',
+      attachmentId: 'late',
+    });
+    expect(mementoTestState.value.text).toBe('main draft');
   });
 });
 
