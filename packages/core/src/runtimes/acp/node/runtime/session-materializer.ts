@@ -1,4 +1,8 @@
-import type { LoadSessionRequest, NewSessionRequest } from '@agentclientprotocol/sdk';
+import type {
+  LoadSessionRequest,
+  NewSessionRequest,
+  NewSessionResponse,
+} from '@agentclientprotocol/sdk';
 import type { Result } from '@emdash/shared';
 import { toSerializedError } from '@emdash/shared';
 import { acquireResourceAsResult } from '@emdash/shared/concurrency';
@@ -29,6 +33,7 @@ export type MaterializedSession = {
 };
 
 export interface SessionMaterializerCallbacks {
+  sideParent?(conversationId: string): SessionRecord | null;
   isCurrent(entry: ConversationHandle, epoch: number): boolean;
   onRecordCreated(record: SessionRecord, scope: Scope): void;
   onRecordChanged(record: SessionRecord): void;
@@ -90,6 +95,9 @@ export class SessionMaterializer {
     let unstarted = true;
 
     try {
+      if (input.sideParentConversationId && input.sessionId) {
+        return acpErr.invalidState('This temporary side chat has ended. Open a new side chat.');
+      }
       if (input.sessionId && (!connection.supportsLoadSession || !connection.agent.loadSession)) {
         return acpErr.invalidState(
           'This provider cannot restore the existing conversation. Its saved session has been preserved.'
@@ -177,7 +185,7 @@ export class SessionMaterializer {
         let response;
         try {
           response = await abortable(
-            connection.agent.newSession(this.buildNewSessionRequest(input.cwd, mcpServers)),
+            this.createProviderSession(input, connection, mcpServers, signal),
             signal
           );
         } catch (error) {
@@ -220,6 +228,36 @@ export class SessionMaterializer {
       if (isAuthRequiredError(error)) return acpErr.authRequired(toSerializedError(error));
       return acpErr.initializeFailed(toSerializedError(error));
     }
+  }
+
+  private async createProviderSession(
+    input: AcpStartInput,
+    connection: AcpConnectionEntry,
+    mcpServers: NewSessionRequest['mcpServers'],
+    signal: AbortSignal
+  ): Promise<NewSessionResponse> {
+    if (!input.sideParentConversationId) {
+      return connection.agent.newSession(this.buildNewSessionRequest(input.cwd, mcpServers));
+    }
+    const parent = this.callbacks.sideParent?.(input.sideParentConversationId);
+    if (
+      !parent ||
+      parent.input.sideParentConversationId ||
+      parent.processKey !== connection.key ||
+      parent.processGeneration !== connection.generation ||
+      !connection.agent.forkSideSession
+    )
+      throw new Error('The main session is unavailable or does not support temporary side chats.');
+    const response = await connection.agent.forkSideSession({
+      cwd: input.cwd,
+      mcpServers,
+      sessionId: parent.cell.acpSessionId,
+    });
+    if (signal.aborted) {
+      await connection.agent.closeSession?.({ sessionId: response.sessionId });
+      throw signal.reason;
+    }
+    return response;
   }
 
   private async acquireHandshake(processOwner: string, signal: AbortSignal): Promise<() => void> {
@@ -286,7 +324,8 @@ export class SessionMaterializer {
       providerId: input.providerId,
       acpSessionId,
       agent: connection.agent,
-      resolveAttachment: this.deps.resolveAttachment,
+      resolveAttachment: (conversationId, attachment) =>
+        this.deps.resolveAttachment(input.sideParentConversationId ?? conversationId, attachment),
       logger: this.deps.logger,
       callbacks,
     });

@@ -200,6 +200,10 @@ export const toolbar = style({
 
 export const toolbarLeft = style({
   display: 'flex',
+  // 分栏和窄窗口中保留完整控件，避免将发送按钮挤出可点击区域。
+  flex: '1 1 auto',
+  flexWrap: 'wrap',
+  minWidth: 0,
   alignItems: 'center',
   gap: '0.375rem',
   minHeight: '2rem',
@@ -221,7 +225,12 @@ export const mcpErrorText = style({
   overflowWrap: 'anywhere',
   whiteSpace: 'pre-wrap',
 });
-export const toolbarRight = style({ display: 'flex', alignItems: 'center', gap: '0.25rem' });
+export const toolbarRight = style({
+  display: 'flex',
+  alignItems: 'center',
+  gap: '0.25rem',
+  flexShrink: 0,
+});
 
 export const permissionModeTrigger = style({
   paddingLeft: '0.1875rem',

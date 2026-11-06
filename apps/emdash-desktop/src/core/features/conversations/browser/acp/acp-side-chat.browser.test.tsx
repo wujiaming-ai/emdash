@@ -1,4 +1,3 @@
-import { deferred } from '@emdash/shared/testing';
 import { ThemeProvider } from '@emdash/ui/react/primitives';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -12,7 +11,6 @@ let host: HTMLDivElement;
 let root: Root;
 const request = vi.fn();
 const add = vi.fn();
-const client = { sideQuestion: request };
 async function render(
   enabled = true,
   key = 'one',
@@ -22,9 +20,21 @@ async function render(
     root.render(
       <ThemeProvider theme={theme}>
         <div style={{ height: 680, width: '100%' }}>
-          <AcpSideChatLayout key={key} client={enabled ? client : null} onAddToConversation={add}>
+          <AcpSideChatLayout
+            key={key}
+            enabled={enabled}
+            renderSide={({ quote, onClose }) => (
+              <aside aria-label="Side chat" className="h-full p-4">
+                <p>{quote}</p>
+                <button onClick={onClose}>Close side chat</button>
+              </aside>
+            )}
+            onAddToConversation={add}
+          >
             <div className="surface-paper h-full p-8">
-              <p data-block-id="message#1">The main task is still running.</p>
+              <p data-block-id="message#1">
+                <span>The main task is still running.</span>
+              </p>
               <textarea aria-label="Main draft" />
             </div>
           </AcpSideChatLayout>
@@ -68,30 +78,66 @@ afterEach(async () => {
   await page.viewport(1280, 800);
 });
 
-it('opens from selected text, asks follow-ups and only adds an answer on explicit action', async () => {
-  await openSide();
+it('keeps selection actions after the release click and lets the user open side chat', async () => {
+  await select();
+  await expect.element(page.getByRole('button', { name: 'Ask in side chat' })).toBeVisible();
+  // 拖选结束后的 click 不会折叠选区，必须经过真实 Popover 的外部点击处理。
+  await act(async () => {
+    host
+      .querySelector('[data-block-id]')
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  await expect.element(page.getByRole('button', { name: 'Ask in side chat' })).toBeVisible();
+  await page.getByRole('button', { name: 'Ask in side chat' }).click();
   await expect.element(page.getByRole('complementary', { name: 'Side chat' })).toBeVisible();
-  await expect.element(page.getByRole('textbox', { name: 'Side question' })).toHaveFocus();
-  await page.getByRole('textbox', { name: 'Side question' }).fill('Explain this');
-  await page.getByRole('button', { name: 'Send side question' }).click();
-  await expect
-    .element(page.getByText('This is an isolated answer.', { exact: true }))
-    .toBeVisible();
-  expect(request.mock.calls[0][0]).toMatchObject({
-    action: 'ask',
-    question: 'Explain this',
-    quote: 'The main task is still running.',
-  });
-  expect(add).not.toHaveBeenCalled();
+  expect(request).not.toHaveBeenCalled();
+});
+
+it('keeps selection actions after a native double click', async () => {
+  await page.getByText('The main task is still running.', { exact: true }).dblClick();
+  expect(window.getSelection()?.isCollapsed).toBe(false);
+  await expect.element(page.getByRole('button', { name: 'Add to conversation' })).toBeVisible();
+  const selected = window.getSelection()?.toString().trim();
   await page.getByRole('button', { name: 'Add to conversation' }).click();
-  expect(add).toHaveBeenCalledExactlyOnceWith('This is an isolated answer.');
-  await page.getByRole('textbox', { name: 'Side question' }).fill('Why?');
-  await page.getByRole('button', { name: 'Send side question' }).click();
-  expect(request.mock.calls[1][0]).toMatchObject({
-    sideId: request.mock.calls[0][0].sideId,
-    question: 'Why?',
-    quote: undefined,
+  expect(add).toHaveBeenCalledExactlyOnceWith(selected);
+  expect(request).not.toHaveBeenCalled();
+});
+
+it('still dismisses on outside clicks even if the selected text remains', async () => {
+  await select();
+  await expect.element(page.getByRole('button', { name: 'Ask in side chat' })).toBeVisible();
+  await act(async () => {
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   });
+  expect(window.getSelection()?.isCollapsed).toBe(false);
+  await expect
+    .element(page.getByRole('button', { name: 'Ask in side chat' }))
+    .not.toBeInTheDocument();
+  expect(request).not.toHaveBeenCalled();
+});
+
+it('still dismisses on Escape, selection clearing and transcript scrolling', async () => {
+  await select();
+  await userEvent.keyboard('{Escape}');
+  await expect
+    .element(page.getByRole('button', { name: 'Ask in side chat' }))
+    .not.toBeInTheDocument();
+  await select();
+  await act(async () => {
+    window.getSelection()?.removeAllRanges();
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  await expect
+    .element(page.getByRole('button', { name: 'Ask in side chat' }))
+    .not.toBeInTheDocument();
+  await select();
+  await act(async () => {
+    host.querySelector('[data-block-id]')?.dispatchEvent(new Event('scroll'));
+  });
+  await expect
+    .element(page.getByRole('button', { name: 'Ask in side chat' }))
+    .not.toBeInTheDocument();
+  expect(request).not.toHaveBeenCalled();
 });
 
 it('puts a selection into the draft without creating a side request', async () => {
@@ -99,56 +145,6 @@ it('puts a selection into the draft without creating a side request', async () =
   await page.getByRole('button', { name: 'Add to conversation' }).click();
   expect(add).toHaveBeenCalledExactlyOnceWith('The main task is still running.');
   expect(request).not.toHaveBeenCalled();
-});
-
-it('cancels the side request and suppresses its late answer', async () => {
-  const answer = deferred<unknown>();
-  request.mockImplementation((input) =>
-    input.action === 'ask' ? answer.promise : Promise.resolve({ success: true, data: { text: '' } })
-  );
-  await openSide();
-  await page.getByRole('textbox', { name: 'Side question' }).fill('Long question');
-  await page.getByRole('button', { name: 'Send side question' }).click();
-  await page.getByRole('button', { name: 'Stop side answer' }).click();
-  expect(request.mock.calls[1][0]).toMatchObject({
-    action: 'cancel',
-    sideId: request.mock.calls[0][0].sideId,
-  });
-  await act(async () => answer.resolve({ success: true, data: { text: 'late answer' } }));
-  await expect.element(page.getByText('late answer')).not.toBeInTheDocument();
-  await expect.element(page.getByRole('button', { name: 'Send side question' })).toBeVisible();
-});
-
-it('closes and isolates state when switching conversations during a request', async () => {
-  const answer = deferred<unknown>();
-  request.mockImplementation((input) =>
-    input.action === 'ask' ? answer.promise : Promise.resolve({ success: true, data: { text: '' } })
-  );
-  await openSide();
-  await page.getByRole('textbox', { name: 'Side question' }).fill('Question');
-  await page.getByRole('button', { name: 'Send side question' }).click();
-  await render(true, 'two');
-  expect(request.mock.calls[1][0]).toMatchObject({
-    action: 'close',
-    sideId: request.mock.calls[0][0].sideId,
-  });
-  await act(async () => answer.resolve({ success: true, data: { text: 'old answer' } }));
-  await expect
-    .element(page.getByRole('complementary', { name: 'Side chat' }))
-    .not.toBeInTheDocument();
-  await expect.element(page.getByText('old answer')).not.toBeInTheDocument();
-});
-
-it('shows request errors and permits retry without submitting to the main conversation', async () => {
-  request.mockResolvedValueOnce({ success: false, error: { message: 'Side service unavailable' } });
-  await openSide();
-  await page.getByRole('textbox', { name: 'Side question' }).fill('Question');
-  await page.getByRole('button', { name: 'Send side question' }).click();
-  await expect.element(page.getByRole('alert')).toHaveTextContent('Side service unavailable');
-  await page.getByRole('textbox', { name: 'Side question' }).fill('Try again');
-  await page.getByRole('button', { name: 'Send side question' }).click();
-  await expect.element(page.getByText('This is an isolated answer.')).toBeVisible();
-  expect(add).not.toHaveBeenCalled();
 });
 
 it('does not expose side actions for agents without the negotiated capability', async () => {
@@ -166,9 +162,7 @@ it.each(['emlight', 'emdark'])(
     await render(true, 'one', theme === 'emdark' ? 'dark' : 'light');
     await page.viewport(480, 800);
     await openSide();
-    await page
-      .getByRole('textbox', { name: 'Side question' })
-      .fill('中文问题 ' + 'long-question-'.repeat(30));
+
     const panel = host.querySelector('aside');
     if (!(panel instanceof HTMLElement)) throw new Error('Missing side panel');
     expect(panel.scrollWidth).toBeLessThanOrEqual(panel.clientWidth + 1);
@@ -188,11 +182,7 @@ it('uses a resizable side panel and selection toolbar at desktop width', async (
   await expect.element(page.getByRole('button', { name: 'Ask in side chat' })).toBeVisible();
   await page.screenshot({ path: '__screenshots__/side-chat-selection.png' });
   await page.getByRole('button', { name: 'Ask in side chat' }).click();
-  await page
-    .getByRole('textbox', { name: 'Side question' })
-    .fill('How does this stay separate from the main task?');
-  await page.getByRole('button', { name: 'Send side question' }).click();
-  await expect.element(page.getByText('This is an isolated answer.')).toBeVisible();
+
   const panel = host.querySelector('aside');
   const main = host.querySelector('[data-block-id]');
   if (!(panel instanceof HTMLElement) || !(main instanceof HTMLElement))
@@ -200,19 +190,6 @@ it('uses a resizable side panel and selection toolbar at desktop width', async (
   expect(panel.getBoundingClientRect().left).toBeGreaterThan(main.getBoundingClientRect().right);
   await page.screenshot({ path: '__screenshots__/side-chat-desktop.png' });
   await page.getByRole('button', { name: 'Close side chat' }).click();
-  expect(request.mock.calls.at(-1)?.[0]).toMatchObject({ action: 'close' });
-  await expect.element(page.getByRole('textbox', { name: 'Main draft' })).toBeVisible();
-});
 
-it('keeps Shift+Enter as a newline and sends a side question with Enter', async () => {
-  await openSide();
-  await page.getByRole('textbox', { name: 'Side question' }).fill('First line');
-  await userEvent.keyboard('{Shift>}{Enter}{/Shift}');
-  expect(request).not.toHaveBeenCalled();
-  await userEvent.keyboard('Second line{Enter}');
-  await expect.element(page.getByText('This is an isolated answer.')).toBeVisible();
-  expect(request.mock.calls[0][0]).toMatchObject({
-    action: 'ask',
-    question: 'First line\nSecond line',
-  });
+  await expect.element(page.getByRole('textbox', { name: 'Main draft' })).toBeVisible();
 });

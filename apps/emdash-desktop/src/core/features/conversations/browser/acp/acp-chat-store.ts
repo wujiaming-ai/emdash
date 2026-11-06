@@ -35,6 +35,7 @@ import {
   ACP_DRAFT_MAX_LENGTH,
   acpDraftMemento,
   type AcpDraftState,
+  type AcpDraftQuote,
 } from '@core/features/conversations/contributions/mementos';
 import { conversationSubject } from '@core/features/conversations/contributions/subject';
 import type { ProjectHostAccess } from '@core/features/projects/api/browser/stores/project-context';
@@ -96,6 +97,11 @@ export type AcpLoadError =
   | { kind: 'history_unavailable'; message: string }
   | { kind: 'generic'; message: string };
 
+export type AcpSideSessionOptions = {
+  parentConversationId: string;
+  providerId: string;
+};
+
 export class AcpChatStore {
   readonly chatContext: ChatContext;
   readonly chatState: ChatState;
@@ -111,6 +117,7 @@ export class AcpChatStore {
     return this._draftText.get();
   }
   draftAttachments: AcpPromptAttachment[] = [];
+  draftQuotes: AcpDraftQuote[] = [];
   unconfirmedPromptIds: string[] = [];
 
   private _view: ChatView | null = null;
@@ -121,8 +128,9 @@ export class AcpChatStore {
     undefined,
     { deep: false }
   );
-  private readonly _draftSpace: SubjectSpace<'conversation'>;
-  private readonly _draftHandle: MementoHandle<AcpDraftState>;
+  private readonly _draftSpace: SubjectSpace<'conversation'> | null;
+  private readonly _draftHandle: MementoHandle<AcpDraftState> | null;
+  private readonly _sideAttachmentIds = new Set<string>();
   private readonly _disposeComposerSubscription: () => void;
   private readonly _disposeHostReaction: () => void;
   private _attachmentsClientPromise: Promise<ConversationsClient['attachments']> | null = null;
@@ -139,17 +147,21 @@ export class AcpChatStore {
     readonly conversationId: string,
     readonly projectId: string,
     readonly taskId: string,
-    readonly hostAccess?: ProjectHostAccess
+    readonly hostAccess?: ProjectHostAccess,
+    readonly sideSession?: AcpSideSessionOptions
   ) {
     const conversation = conversationRegistry.get(taskId)?.conversations.get(conversationId)?.data;
-    this.historyKnown = conversation !== undefined && !conversation.sessionId;
+    this.historyKnown =
+      Boolean(sideSession) || (conversation !== undefined && !conversation.sessionId);
     this.chatContext = getSharedChatContext();
     this._scope = createScope({ label: `acp-chat:${conversationId}` });
     this.chatState = getChatUiRuntime().createChatState(this.chatContext, {
       uri: conversationId,
     });
-    this._draftSpace = getMementoClient().subject(conversationSubject({ conversationId }));
-    this._draftHandle = this._draftSpace.handle(acpDraftMemento);
+    this._draftSpace = sideSession
+      ? null
+      : getMementoClient().subject(conversationSubject({ conversationId }));
+    this._draftHandle = this._draftSpace?.handle(acpDraftMemento) ?? null;
     registerConversationCommands(conversationId, () =>
       this.commands.map((command) => command.name)
     );
@@ -162,6 +174,10 @@ export class AcpChatStore {
       messageCount: observable,
       draftText: computed,
       draftAttachments: observable.shallow,
+      draftQuotes: observable.shallow,
+      addDraftQuote: action,
+      updateDraftQuote: action,
+      removeDraftQuote: action,
       unconfirmedPromptIds: observable.shallow,
       commands: computed,
       mcpServers: computed,
@@ -227,10 +243,11 @@ export class AcpChatStore {
         }
       }
     );
-    this._draftHandle.autoPersist(
+    this._draftHandle?.autoPersist(
       () => ({
         version: '1' as const,
         text: this.draftText.slice(0, ACP_DRAFT_MAX_LENGTH),
+        ...(this.draftQuotes.length ? { quotes: this.draftQuotes } : {}),
         attachments: this.draftAttachments.map(({ ref }) => ({
           id: ref.id,
           mimeType: ref.mimeType,
@@ -239,12 +256,20 @@ export class AcpChatStore {
       }),
       this._scope
     );
-    void this._draftSpace.ready.then(
+    void this._draftSpace?.ready.then(
       () => {
         runInAction(() => {
-          if (this._disposed || this.draftText !== '' || this.draftAttachments.length > 0) return;
-          const stored = this._draftHandle.value;
+          if (
+            this._disposed ||
+            this.draftText !== '' ||
+            this.draftAttachments.length > 0 ||
+            this.draftQuotes.length > 0
+          )
+            return;
+          const stored = this._draftHandle?.value;
+          if (!stored) return;
           this.composerModel.setText(stored.text);
+          this.draftQuotes = stored.quotes ?? [];
           this.draftAttachments = stored.attachments.map((attachment) => ({
             ref: { type: 'attachment', ...attachment },
           }));
@@ -253,6 +278,19 @@ export class AcpChatStore {
       },
       (error: unknown) => getMementoClient().reportError(error)
     );
+  }
+
+  get providerId(): string | null {
+    return (
+      this.sideSession?.providerId ??
+      conversationRegistry.get(this.taskId)?.conversations.get(this.conversationId)?.data
+        .providerId ??
+      null
+    );
+  }
+
+  private get attachmentConversationId(): string {
+    return this.sideSession?.parentConversationId ?? this.conversationId;
   }
 
   get commands(): CommandItem[] {
@@ -368,7 +406,7 @@ export class AcpChatStore {
     try {
       const client = await this._getAttachmentsClient();
       const result = await client.upload(
-        { conversationId: this.conversationId },
+        { conversationId: this.attachmentConversationId },
         {
           name: input.name ?? 'attachment',
           mimeType: input.mimeType,
@@ -380,6 +418,13 @@ export class AcpChatStore {
         this._toastError('Failed to upload attachment', result.error);
         return null;
       }
+      if (this.sideSession) {
+        if (this._disposed) {
+          await this.deleteAttachment(result.data.id);
+          return null;
+        }
+        this._sideAttachmentIds.add(result.data.id);
+      }
       return result.data;
     } catch (error) {
       this._toastError('Failed to upload attachment', error);
@@ -390,7 +435,7 @@ export class AcpChatStore {
   async downloadAttachment(id: string) {
     const client = await this._getAttachmentsClient();
     const result = await client.download({
-      conversationId: this.conversationId,
+      conversationId: this.attachmentConversationId,
       attachmentId: id,
     });
     if (!result.success) return result;
@@ -407,10 +452,11 @@ export class AcpChatStore {
     try {
       const client = await this._getAttachmentsClient();
       const result = await client.delete({
-        conversationId: this.conversationId,
+        conversationId: this.attachmentConversationId,
         attachmentId: id,
       });
       if (!result.success) this._toastError('Failed to delete attachment', result.error);
+      else this._sideAttachmentIds.delete(id);
     } catch (error) {
       this._toastError('Failed to delete attachment', error);
     }
@@ -427,6 +473,8 @@ export class AcpChatStore {
       this.loadError?.kind === 'session_not_found'
     )
       return;
+    const quotes = this.draftQuotes;
+    this.draftQuotes = [];
     const promptAttachments = attachments.map((attachment) => attachment.ref);
     const submissionSequence = ++this._submissionSequence;
     const promptId = crypto.randomUUID();
@@ -446,20 +494,48 @@ export class AcpChatStore {
       this.chatState.scroll.set(pinMode);
     }
 
-    void this._submitPrompt(promptId, text, promptAttachments, hiddenContext).then((outcome) => {
-      if (outcome === 'accepted') onAccepted?.();
-      if (outcome !== 'rejected') return;
-      runInAction(() => {
-        if (this._disposed || submissionSequence !== this._submissionSequence) return;
-        if (optimisticId && this.chatState.session.state.pendingPrompt?.id === optimisticId) {
-          this.chatState.session.setPendingPrompt(null);
-          this._syncMessageCount();
-        }
-        if (this.draftText !== '' || this.draftAttachments.length > 0) return;
-        this.composerModel.setText(text);
-        this.draftAttachments = attachments;
-      });
-    });
+    void this._submitPrompt(promptId, text, promptAttachments, hiddenContext, quotes).then(
+      (outcome) => {
+        if (outcome === 'accepted') onAccepted?.();
+        if (outcome !== 'rejected') return;
+        runInAction(() => {
+          if (this._disposed || submissionSequence !== this._submissionSequence) return;
+          if (optimisticId && this.chatState.session.state.pendingPrompt?.id === optimisticId) {
+            this.chatState.session.setPendingPrompt(null);
+            this._syncMessageCount();
+          }
+          this.draftQuotes = [...quotes, ...this.draftQuotes];
+          if (this.draftText !== '' || this.draftAttachments.length > 0) return;
+          this.composerModel.setText(text);
+          this.draftAttachments = attachments;
+        });
+      }
+    );
+  }
+
+  addDraftQuote(text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (trimmed.length > ACP_DRAFT_MAX_LENGTH) {
+      this._toastError(
+        'Reference is too long',
+        new Error(`Maximum ${ACP_DRAFT_MAX_LENGTH} characters`)
+      );
+      return;
+    }
+    this.draftQuotes = [...this.draftQuotes, { id: crypto.randomUUID(), text: trimmed }];
+    this.composerModel.focus();
+  }
+
+  updateDraftQuote(id: string, text: string): void {
+    if (!text.trim() || text.length > ACP_DRAFT_MAX_LENGTH) return;
+    this.draftQuotes = this.draftQuotes.map((quote) =>
+      quote.id === id ? { ...quote, text: text.trim() } : quote
+    );
+  }
+
+  removeDraftQuote(id?: string): void {
+    this.draftQuotes = id ? this.draftQuotes.filter((quote) => quote.id !== id) : [];
   }
 
   setDraftText(text: string): void {
@@ -593,7 +669,9 @@ export class AcpChatStore {
   }
 
   dispose(): void {
+    if (this._disposed) return;
     this._disposed = true;
+    if (this.sideSession) void this._closeSideSession();
     this._disposeHostReaction();
     unregisterConversationCommands(this.conversationId);
     this._unsubs.splice(0).forEach((unsub) => unsub());
@@ -603,8 +681,22 @@ export class AcpChatStore {
     this.composerModel.dispose();
     void this._scope
       .dispose()
-      .then(() => this._draftSpace.release())
+      .then(() => this._draftSpace?.release())
       .catch((error: unknown) => getMementoClient().reportError(error));
+  }
+
+  private async _closeSideSession(): Promise<void> {
+    try {
+      const client = await getConversationsClient();
+      const result = await client.acp.closeSideSession({ conversationId: this.conversationId });
+      if (!result.success) {
+        this._toastError('Failed to close side chat', result.error);
+        return;
+      }
+      await Promise.all([...this._sideAttachmentIds].map((id) => this.deleteAttachment(id)));
+    } catch (error) {
+      this._toastError('Failed to close side chat', error);
+    }
   }
 
   private async _runBootstrap(mode?: AcpSessionStartMode): Promise<void> {
@@ -620,8 +712,7 @@ export class AcpChatStore {
       });
       return;
     }
-    const providerId = conversationRegistry.get(this.taskId)?.conversations.get(this.conversationId)
-      ?.data.providerId;
+    const providerId = this.providerId;
     let clientSession: AcpLiveSession | null = null;
     try {
       const attachedSession = await AcpLiveSession.create(this.conversationId);
@@ -775,7 +866,8 @@ export class AcpChatStore {
     promptId: string,
     text: string,
     attachments: StoredPromptAttachment[],
-    hiddenContext?: string | Promise<string | undefined>
+    hiddenContext?: string | Promise<string | undefined>,
+    quotes: readonly AcpDraftQuote[] = []
   ): Promise<'accepted' | 'rejected' | 'unknown'> {
     if (this.hostAccess?.liveAction.kind === 'disabled') return 'rejected';
     const session = this.session;
@@ -792,6 +884,19 @@ export class AcpChatStore {
         conversationId: this.conversationId,
         error,
       });
+    }
+
+    if (quotes.length) {
+      const references = quotes
+        .map(
+          (quote, index) =>
+            `${index + 1}. Selected text:\n${quote.text
+              .split('\n')
+              .map((line) => `> ${line}`)
+              .join('\n')}`
+        )
+        .join('\n\n');
+      resolvedHiddenContext = [resolvedHiddenContext, references].filter(Boolean).join('\n\n');
     }
 
     try {

@@ -6,9 +6,14 @@ import { conversationSubject } from './subject';
 
 export const ACP_DRAFT_MAX_LENGTH = 65_536;
 
+export type AcpDraftQuote = { id: string; text: string };
+
 const acpDraftV1Schema = z.object({
   version: z.literal('1'),
   text: z.string().max(ACP_DRAFT_MAX_LENGTH),
+  quotes: z
+    .array(z.object({ id: z.string(), text: z.string().max(ACP_DRAFT_MAX_LENGTH) }))
+    .optional(),
   attachments: z.array(
     z.object({
       id: z.string(),

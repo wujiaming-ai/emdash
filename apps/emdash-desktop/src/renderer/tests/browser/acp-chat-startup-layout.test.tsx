@@ -12,7 +12,7 @@ import '@emdash/chat-ui/style.css';
 import { ok } from '@emdash/shared';
 import { deferred } from '@emdash/shared/testing';
 import type { PromptEditorModel } from '@emdash/ui/react/components';
-import '@emdash/ui/style.css';
+import { ThemeProvider } from '@emdash/ui/react/primitives';
 import {
   client,
   connect,
@@ -21,8 +21,9 @@ import {
   defineContract,
   memoryTransportPair,
 } from '@emdash/wire/rpc';
+import '@emdash/ui/style.css';
 import { cell, expose, flushStateTurn, peek } from '@emdash/wire/state';
-import { observable, runInAction } from 'mobx';
+import { observable, reaction, runInAction } from 'mobx';
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { beforeAll, expect, it, vi } from 'vitest';
@@ -33,9 +34,14 @@ import { installChatUiRuntime } from '@core/features/conversations/api/browser/c
 import { diffCommentsMention } from '@core/features/conversations/api/browser/chat/diff-comments-mention';
 import { emptyProviderSettings } from '@core/features/conversations/api/provider-settings';
 import type { ProviderSettingsSnapshot } from '@core/features/conversations/api/provider-settings';
-import { AcpChatPanel } from '@core/features/conversations/browser/acp/acp-chat-panel';
+import {
+  AcpChatPanel,
+  ComposerForStore,
+} from '@core/features/conversations/browser/acp/acp-chat-panel';
 import { AcpChatStore } from '@core/features/conversations/browser/acp/acp-chat-store';
-import type { AcpLiveSession } from '@core/features/conversations/browser/acp/acp-live-session';
+import { AcpDraftReferences } from '@core/features/conversations/browser/acp/acp-draft-references';
+import { AcpLiveSession } from '@core/features/conversations/browser/acp/acp-live-session';
+import { AcpSideSessionPane } from '@core/features/conversations/browser/acp/acp-side-session-pane';
 import { DraftCommentsStore } from '@core/features/source-control/api/browser/diff-view/stores/draft-comments-store';
 import { openModal } from '@core/manifests/browser/modal-api';
 import type { AgentMetadata } from '@core/primitives/agents/api';
@@ -1124,3 +1130,372 @@ it('leaves unmatched, escaped and embedded dollar text unchanged in Codex', asyn
     await test.cleanup();
   }
 });
+
+function sideSource<T>(initial: T) {
+  const value = observable.box(initial, { deep: false });
+  return {
+    current: () => value.get(),
+    set: (next: T) => runInAction(() => value.set(next)),
+    onChange: (callback: (next: T) => void) => reaction(() => value.get(), callback),
+    ready: Promise.resolve(),
+    dispose: async () => {},
+  };
+}
+
+function sideSessionFixture() {
+  const config = sideSource<SessionConfigState>({
+    availableCommands: [
+      { name: 'status', description: 'Status', source: 'provider-command' },
+      { name: '$review', description: 'Review skill', source: 'provider-command' },
+    ],
+    options: [
+      {
+        id: 'model',
+        name: 'Model',
+        category: 'model',
+        type: 'select',
+        currentValue: 'one',
+        options: [
+          { value: 'one', name: 'Model One' },
+          { value: 'two', name: 'Model Two' },
+        ],
+      },
+      {
+        id: 'effort',
+        name: 'Effort',
+        category: 'thought_level',
+        type: 'select',
+        currentValue: 'high',
+        options: [
+          { value: 'high', name: 'High' },
+          { value: 'low', name: 'Low' },
+        ],
+      },
+      {
+        id: 'mode',
+        name: 'Permissions',
+        category: 'mode',
+        type: 'select',
+        currentValue: 'default',
+        options: [
+          { value: 'default', name: 'Default permissions' },
+          { value: 'full', name: 'Full access' },
+        ],
+      },
+      {
+        id: 'collaboration',
+        name: 'Collaboration',
+        category: 'collaboration_mode',
+        type: 'select',
+        currentValue: 'default',
+        options: [
+          { value: 'default', name: 'Default' },
+          { value: 'plan', name: 'Plan' },
+        ],
+      },
+      { id: 'fast', name: 'Fast', type: 'boolean', currentValue: false },
+    ],
+  });
+  const state = sideSource<SessionState>({
+    lifecycle: 'ready',
+    activeTurnId: null,
+    transcript: transcriptSnapshot(),
+    pendingPermissions: [],
+    lastStopReason: null,
+    lastTurnErrored: false,
+    queuedPrompts: [],
+    agentTurnActive: false,
+    backgroundAgentCount: 0,
+    isGenerating: false,
+    canSubmit: true,
+    canCancel: false,
+  });
+  const sendPrompt = vi.fn<AcpLiveSession['sendPrompt']>(async () => ok({ queued: false }));
+  const setOption = vi.fn(async (id: string, value: string | boolean) => {
+    config.set({
+      ...config.current(),
+      options: config
+        .current()
+        .options?.map((option) =>
+          option.id === id ? ({ ...option, currentValue: value } as typeof option) : option
+        ),
+    });
+    return ok({ reapplyFailures: [] });
+  });
+  const cancelTurn = vi.fn(async () => ok());
+  const session = {
+    conversationId: 'side:test',
+    usable: true,
+    sessionState: state,
+    config,
+    plan: sideSource(null),
+    terminals: sideSource([]),
+    mcpServers: sideSource([{ name: 'docs', transport: 'stdio' }]),
+    usage: sideSource({ contextUsed: 1000, contextSize: 200000 }),
+    sendPrompt,
+    setOption,
+    cancelTurn,
+    startSession: async () => ok({ sessionId: 'side-native' }),
+    loadHistory: async () => ok(availableHistory()),
+    dispose: () => {},
+  } as unknown as AcpLiveSession;
+  return { session, sendPrompt, setOption, cancelTurn, state };
+}
+
+it('mounts the main composer in side chat with independent controls, native skills and file uploads', async () => {
+  await page.viewport(1280, 900);
+  fixture.restored = false;
+  fixture.providerId = 'codex';
+  installChatUiRuntime(chatUi);
+  const context = chatUi.createChatContext();
+  fixture.context = context;
+  const parentStore = new AcpChatStore('startup-diagnostic', 'project-1', 'task-1');
+  parentStore.setDraftText('Keep my main draft');
+  const side = sideSessionFixture();
+  const create = vi.spyOn(AcpLiveSession, 'create').mockResolvedValue(side.session);
+  const close = vi.fn(async () => ok());
+  const upload = vi.fn(
+    async (
+      _key: unknown,
+      file: { name: string; mimeType: string; source: AsyncIterable<Uint8Array> }
+    ) => {
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of file.source) chunks.push(chunk);
+      expect(chunks.length).toBeGreaterThan(0);
+      return ok({
+        id: file.name,
+        name: file.name,
+        mimeType: file.mimeType,
+        targetPath: `/remote/uploads/${file.name}`,
+        pathStyle: 'posix',
+      });
+    }
+  );
+  const remove = vi.fn(async () => ok());
+  fixture.client = {
+    acp: {
+      openSideSession: async () => ({ conversationId: 'side:test' }),
+      closeSideSession: close,
+    },
+    attachments: { upload, delete: remove },
+  };
+  const host = document.createElement('div');
+  host.className = 'emlight';
+  host.style.cssText = 'width:550px;height:760px;position:relative';
+  document.body.append(host);
+  const root = createRoot(host);
+  let sideStore: AcpChatStore | undefined;
+  try {
+    await act(async () =>
+      root.render(
+        <AcpSideSessionPane
+          parent={parentStore}
+          sideId={crypto.randomUUID()}
+          quote="Selected passage"
+          onClose={() => {}}
+          onAdd={() => {}}
+          renderComposer={(store, slot, onViewerOpen) => {
+            sideStore = store;
+            return (
+              <ComposerForStore store={store} composerSlot={slot} onViewerOpen={onViewerOpen} />
+            );
+          }}
+        />
+      )
+    );
+    await expect
+      .element(page.getByRole('button', { name: '1 reference', exact: true }))
+      .toBeVisible();
+    expect(sideStore!.draftText).toBe('');
+    await page.getByRole('button', { name: '1 reference', exact: true }).click();
+    await expect.element(page.getByText('Selected passage', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Edit reference 1' }).click();
+    await page.getByRole('textbox', { name: 'Reference text' }).fill('Edited passage');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect.element(page.getByText('Edited passage', { exact: true })).toBeVisible();
+    await act(async () => sideStore!.addDraftQuote('Another passage'));
+    await expect
+      .element(page.getByRole('button', { name: '2 references', exact: true }))
+      .toBeVisible();
+    await page.getByRole('button', { name: 'Remove reference 2' }).click();
+    await expect
+      .element(page.getByRole('button', { name: '1 reference', exact: true }))
+      .toBeVisible();
+    await page.screenshot({ path: '__screenshots__/side-reference-card.png' });
+    await userEvent.keyboard('{Escape}');
+    await expect.element(page.getByRole('button', { name: 'Add attachment' })).toBeVisible();
+    await expect.element(page.getByRole('combobox', { name: 'Collaboration mode' })).toBeVisible();
+    await expect.element(page.getByRole('combobox', { name: 'Permission mode' })).toBeVisible();
+    await expect.element(page.getByRole('button', { name: '1 session MCP server' })).toBeVisible();
+    await expect.element(page.getByRole('button', { name: /Context window:/ })).toBeVisible();
+    await page.getByRole('switch', { name: 'Fast' }).click();
+    expect(side.setOption).toHaveBeenCalledWith('fast', true);
+    expect(host.textContent).toContain('Model One');
+    expect(host.textContent).toContain('High');
+    await page.getByText('Model One High', { exact: true }).click();
+    await page.getByRole('option', { name: /Model Two/ }).click();
+    expect(side.setOption).toHaveBeenCalledWith('model', 'two');
+    await page.getByText('Model Two High', { exact: true }).click();
+    await page.getByRole('button', { name: /Effort/ }).click();
+    await page.getByRole('menuitemradio', { name: 'Low', exact: true }).click();
+    expect(side.setOption).toHaveBeenCalledWith('effort', 'low');
+    await userEvent.keyboard('{Escape}');
+    await page.getByRole('combobox', { name: 'Collaboration mode' }).click();
+    await page.getByRole('option', { name: 'Plan', exact: true }).click();
+    expect(side.setOption).toHaveBeenCalledWith('collaboration', 'plan');
+    await page.getByRole('combobox', { name: 'Permission mode' }).click();
+    await page.getByRole('option', { name: 'Full access', exact: true }).click();
+    expect(side.setOption).toHaveBeenCalledWith('mode', 'full');
+    await act(async () => {
+      sideStore!.composerModel.clear();
+      sideStore!.composerModel.focus();
+      await userEvent.keyboard('$rev');
+    });
+    await expect.element(page.getByRole('option', { name: /\$review/ })).toBeVisible();
+    await act(async () => userEvent.keyboard('{Enter}why{Enter}'));
+    await vi.waitFor(() => expect(side.sendPrompt).toHaveBeenCalledOnce());
+    expect(side.sendPrompt.mock.calls[0]?.[0].text).toBe('$review why');
+    expect(side.sendPrompt.mock.calls[0]?.[0].hiddenContext).toContain('> Edited passage');
+    expect(sideStore!.draftQuotes).toEqual([]);
+    await act(async () => {
+      sideStore!.composerModel.focus();
+      await userEvent.keyboard('/');
+    });
+    await expect.element(page.getByRole('option', { name: /\/status/ })).toBeVisible();
+    await userEvent.keyboard('{Escape}');
+    await act(async () => {
+      sideStore!.composerModel.clear();
+      const input = host.querySelector('input[type=file]') as HTMLInputElement;
+      const files = new DataTransfer();
+      files.items.add(new File(['file body'], 'notes.txt', { type: 'text/plain' }));
+      Object.defineProperty(input, 'files', { configurable: true, value: files.files });
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await vi.waitFor(() => expect(sideStore!.draftText).toContain('/remote/uploads/notes.txt'));
+    expect(upload.mock.calls[0]?.[0]).toEqual({ conversationId: 'startup-diagnostic' });
+    const sendRect = page
+      .getByRole('button', { name: 'Send message' })
+      .element()
+      .getBoundingClientRect();
+    expect(sendRect.right).toBeLessThanOrEqual(host.getBoundingClientRect().right);
+    await act(async () => page.getByRole('button', { name: 'Send message' }).click());
+    await vi.waitFor(() => expect(side.sendPrompt).toHaveBeenCalledTimes(2));
+    expect(side.sendPrompt.mock.calls[1]?.[0].text).toContain('/remote/uploads/notes.txt');
+    await act(async () => {
+      const input = host.querySelector('input[type=file]') as HTMLInputElement;
+      const files = new DataTransfer();
+      const bytes = Uint8Array.from(
+        atob(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6x8AAAAASUVORK5CYII='
+        ),
+        (char) => char.charCodeAt(0)
+      );
+      files.items.add(new File([bytes], 'image.png', { type: 'image/png' }));
+      Object.defineProperty(input, 'files', { configurable: true, value: files.files });
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await expect.element(page.getByRole('button', { name: 'View image: image.png' })).toBeVisible();
+    await act(async () => page.getByRole('button', { name: 'Send message' }).click());
+    await vi.waitFor(() => expect(side.sendPrompt).toHaveBeenCalledTimes(3));
+    expect(side.sendPrompt.mock.calls[2]?.[0].attachments).toEqual([
+      { type: 'attachment', id: 'image.png', name: 'image.png', mimeType: 'image/png' },
+    ]);
+    expect(parentStore.draftText).toBe('Keep my main draft');
+    expect(parentStore.draftAttachments).toEqual([]);
+    for (const width of [360, 900]) {
+      host.style.width = `${width}px`;
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      );
+      const rect = host.getBoundingClientRect();
+      for (const control of host.querySelectorAll('button, [role=combobox]')) {
+        const bounds = control.getBoundingClientRect();
+        expect(bounds.left).toBeGreaterThanOrEqual(rect.left);
+        expect(bounds.right).toBeLessThanOrEqual(rect.right);
+      }
+    }
+    await act(async () =>
+      side.state.set({
+        ...side.state.current(),
+        isGenerating: true,
+        canCancel: true,
+        agentTurnActive: true,
+        lifecycle: 'working',
+      })
+    );
+    await page.getByRole('button', { name: 'Stop generation' }).click();
+    expect(side.cancelTurn).toHaveBeenCalledOnce();
+    await page.screenshot({ path: '__screenshots__/side-shared-composer.png' });
+  } finally {
+    await act(async () => root.unmount());
+    await vi.waitFor(() => expect(close).toHaveBeenCalledWith({ conversationId: 'side:test' }));
+    if (upload.mock.calls.length)
+      await vi.waitFor(() =>
+        expect(remove).toHaveBeenCalledWith({
+          conversationId: 'startup-diagnostic',
+          attachmentId: 'notes.txt',
+        })
+      );
+    parentStore.dispose();
+    context.dispose();
+    create.mockRestore();
+    host.remove();
+    fixture.client = undefined;
+  }
+});
+
+it.each(['light', 'dark'] as const)(
+  'keeps reference cards usable in a narrow %s viewport',
+  async (theme) => {
+    await page.viewport(400, 700);
+    installChatUiRuntime(chatUi);
+    fixture.context = chatUi.createChatContext();
+    const store = new AcpChatStore('side:reference-layout', 'project-1', 'task-1', undefined, {
+      parentConversationId: 'startup-diagnostic',
+      providerId: 'codex',
+    });
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      store.addDraftQuote('引用内容 ' + 'long-token'.repeat(60) + '\n<img src=x onerror=alert(1)>');
+      store.addDraftQuote('第二条引用');
+      await act(async () =>
+        root.render(
+          <ThemeProvider theme={theme}>
+            <AcpDraftReferences store={store} />
+          </ThemeProvider>
+        )
+      );
+      await page.getByRole('button', { name: '2 references', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: 'Selected text references' });
+      await expect.element(dialog).toBeVisible();
+      const popup = dialog.element() as HTMLElement;
+      const bounds = popup.getBoundingClientRect();
+      const firstNumber = popup.querySelector('span')!;
+      expect(firstNumber.getBoundingClientRect().left - bounds.left).toBeLessThanOrEqual(12);
+      expect(bounds.left).toBeGreaterThanOrEqual(0);
+      expect(bounds.right).toBeLessThanOrEqual(400);
+      expect(popup.scrollWidth).toBeLessThanOrEqual(popup.clientWidth);
+      expect(popup.querySelector('img')).toBeNull();
+      await page.getByRole('button', { name: 'Edit reference 2' }).click();
+      await page.getByRole('textbox', { name: 'Reference text' }).fill('');
+      await expect.element(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+      expect(store.draftQuotes[1]!.text).toBe('第二条引用');
+      await page.screenshot({ path: `__screenshots__/references-${theme}-narrow.png` });
+      await userEvent.keyboard('{Escape}');
+      await page.getByRole('button', { name: 'Remove all references' }).click();
+      expect(store.draftQuotes).toEqual([]);
+      await expect
+        .element(page.getByRole('button', { name: '2 references', exact: true }))
+        .not.toBeInTheDocument();
+    } finally {
+      await act(async () => root.unmount());
+      store.dispose();
+      host.remove();
+      document.documentElement.classList.remove('emlight', 'emdark');
+      await page.viewport(1280, 900);
+    }
+  }
+);

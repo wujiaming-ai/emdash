@@ -19,6 +19,13 @@ export function connectCodexAcp(io: AcpProcessIo, toClient: AcpClientFactory): A
           .object({ text: z.string() })
           .parse(await connection.extMethod('_emdash/sideQuestion', request));
     }
+    if (response._meta?.['emdash.dev/side-session'] === 1) {
+      agent.forkSideSession = (request) =>
+        connection.unstable_forkSession({
+          ...request,
+          _meta: { ...request._meta, 'emdash.dev/side-session': 1 },
+        });
+    }
     return response;
   };
   return agent;

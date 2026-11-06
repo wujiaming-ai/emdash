@@ -797,6 +797,7 @@ describe('createConversationsWireController', () => {
 function setupController(options: {
   client: Record<string, unknown> & { conversations?: object };
   savedOptions?: ProviderOptionValues;
+  providerId?: string;
   host?: HostRef;
   conversationType?: 'acp' | 'pty';
   runtimeError?: RuntimeResolveError;
@@ -852,6 +853,8 @@ function setupController(options: {
     resolveTarget: async () => ({
       ...target,
       host: options.host ?? target.host,
+      providerId: options.providerId ?? target.providerId,
+      acpInput: { ...target.acpInput, providerId: options.providerId ?? target.providerId },
       conversationType: options.conversationType ?? target.conversationType,
     }),
     hooks,
@@ -879,3 +882,80 @@ function fakeWireFile(): WireFile {
     cancel: () => {},
   };
 }
+
+it.each([LOCAL_HOST_REF, hostRef('remote', 'side-server')])(
+  'routes temporary sessions and independent settings on the parent host (%j)',
+  async (host) => {
+    const resolvedHosts: HostRef[] = [];
+    const attach = vi.fn(async () => ok({ sessionId: null }));
+    const startSession = vi.fn(async () => ok({ sessionId: 'side-native' }));
+    const terminate = vi.fn(async () => ok());
+    const setOption = vi.fn(async () => ok({ reapplyFailures: [] }));
+    const patchConfig = vi.fn();
+    const settings = getProviderSettingsService({} as never);
+    vi.mocked(settings.patch).mockClear();
+    const controller = setupController({
+      host,
+      resolvedHosts,
+      providerId: 'codex',
+      client: {
+        acp: { attach, startSession, terminate, setOption },
+        conversations: { patchConfig },
+      },
+    });
+    const opening = { conversationId: target.conversationId, sideId: crypto.randomUUID() };
+    const opened = (await controller.call('acp.openSideSession', opening)) as {
+      conversationId: string;
+    };
+    expect(await controller.call('acp.openSideSession', opening)).toEqual(opened);
+    await controller.call('acp.attach', opened);
+    await controller.call('acp.startSession', { ...opened, mode: 'fresh' });
+    expect(attach).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...opened,
+        sessionId: null,
+        sideParentConversationId: target.conversationId,
+      }),
+      {}
+    );
+    await controller.call('acp.setOption', { ...opened, configId: 'model', value: 'custom' });
+    expect(setOption).toHaveBeenCalledWith({ ...opened, configId: 'model', value: 'custom' }, {});
+    expect(patchConfig).not.toHaveBeenCalled();
+    expect(settings.patch).not.toHaveBeenCalled();
+    await controller.call('acp.closeSideSession', opened);
+    await controller.call('acp.closeSideSession', opened);
+    expect(terminate).toHaveBeenCalledExactlyOnceWith(opened, {});
+    expect(resolvedHosts.every((value) => value === host)).toBe(true);
+  }
+);
+
+it('rejects side registration on agents without support', async () => {
+  const controller = setupController({ client: {} });
+  await expect(
+    controller.call('acp.openSideSession', {
+      conversationId: target.conversationId,
+      sideId: crypto.randomUUID(),
+    })
+  ).rejects.toThrow('does not support side chat');
+});
+
+it('closes an in-flight side startup without waiting for the model handshake', async () => {
+  const gate = deferred<ReturnType<typeof ok<{ sessionId: string }>>>();
+  const startSession = vi.fn(() => gate.promise);
+  const terminate = vi.fn(async () => ok());
+  const controller = setupController({
+    providerId: 'codex',
+    client: { acp: { startSession, terminate } },
+  });
+  const opened = (await controller.call('acp.openSideSession', {
+    conversationId: target.conversationId,
+    sideId: crypto.randomUUID(),
+  })) as { conversationId: string };
+  const starting = controller.call('acp.startSession', { ...opened, mode: 'fresh' });
+  await vi.waitFor(() => expect(startSession).toHaveBeenCalledOnce());
+  expect(await controller.call('acp.closeSideSession', opened)).toEqual(ok());
+  expect(terminate).toHaveBeenCalledWith(opened, {});
+  gate.resolve(ok({ sessionId: 'late' }));
+  await starting;
+  await expect(controller.call('acp.attach', opened)).rejects.toThrow('has closed');
+});

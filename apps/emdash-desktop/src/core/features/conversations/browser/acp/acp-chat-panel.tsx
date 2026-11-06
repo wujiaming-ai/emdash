@@ -61,23 +61,25 @@ import { resolveIssueMentionSource } from '@core/primitives/issues/api/issue-con
 import { linkedIssueMentionName, type LinkedIssue } from '@core/primitives/linked-issues/api';
 import { log } from '@core/primitives/logging/browser/logger';
 import { usePaneContext } from '@core/primitives/workbench-shell/browser/tabs/pane-context';
+import { resolveAttachmentDataUrl } from './acp-attachment-data-url';
 import type { AcpChatStore, AcpPromptAttachment } from './acp-chat-store';
 import type { AcpChatTabResource } from './acp-chat-tab-resource';
 import { chatViewCommandForShortcut, executeChatViewCommand } from './acp-chat-view-commands';
 import { selectAgentCommandItems } from './acp-command-items';
+import { AcpDraftReferences } from './acp-draft-references';
 import {
   shouldUseAcpImageAttachment,
   toAcpImageAttachmentMimeType,
   uploadDroppedFile,
 } from './acp-dropped-file';
 import { AcpSideChatLayout } from './acp-side-chat';
+import { AcpSideSessionPane } from './acp-side-session-pane';
 import { appendDraftCommentsContext } from './draft-comments-context';
 import { buildIssueMentionHiddenContext } from './issue-mention-context';
 import { createTranscriptFileCommands } from './transcript-file-commands';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const attachmentDataUrlCache = new Map<string, string>();
 const ISSUE_SEARCH_MIN_LENGTH = 2;
 const ISSUE_SEARCH_LIMIT = 20;
 const SLASH_PROMPTS_SECTION = 'Prompts';
@@ -170,37 +172,12 @@ function toComposerAttachment(attachment: AcpPromptAttachment): ComposerAttachme
   };
 }
 
-async function resolveAttachmentDataUrl(store: AcpChatStore, id: string): Promise<string | null> {
-  const cacheKey = `${store.conversationId}:${id}`;
-  const cached = attachmentDataUrlCache.get(cacheKey);
-  if (cached) return cached;
-  try {
-    const result = await store.downloadAttachment(id);
-    if (!result.success) return null;
-    const dataUrl = `data:${result.data.ref.mimeType};base64,${bytesToBase64(result.data.data)}`;
-    attachmentDataUrlCache.set(cacheKey, dataUrl);
-    return dataUrl;
-  } catch (error) {
-    log.warn('Failed to resolve ACP attachment', { id, error });
-    return null;
-  }
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
-  }
-  return btoa(binary);
-}
-
 // ── Composer for a single store ────────────────────────────────────────────────
 //
 // Keyed by conversationId to isolate view-local UI. The store owns the editor
 // model so the document, selection, viewport and undo history survive remounts.
 
-const ComposerForStore = observer(function ComposerForStore({
+export const ComposerForStore = observer(function ComposerForStore({
   store,
   composerSlot,
   onViewerOpen,
@@ -528,9 +505,7 @@ const ComposerForStore = observer(function ComposerForStore({
     [agents]
   );
 
-  const providerId =
-    conversationRegistry.get(store.taskId)?.conversations.get(store.conversationId)?.data
-      .providerId ?? null;
+  const providerId = store.providerId;
   const providerOptions = store.providerOptions;
   const { settings } = useProviderSettings(
     providerOptions === undefined && providerId
@@ -613,6 +588,7 @@ const ComposerForStore = observer(function ComposerForStore({
       )}
       <div>
         <ChatComposer
+          contextContent={<AcpDraftReferences store={store} />}
           model={store.composerModel}
           isWorking={a.isWorking}
           canSubmit={a.canSubmit}
@@ -874,16 +850,21 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
   return (
     <AcpSideChatLayout
       key={store.conversationId}
-      client={store.session?.sessionState.current().canAskSideQuestion ? store.session : null}
-      onAddToConversation={(text) => {
-        store.composerModel.appendTextBlock(
-          `${text
-            .split('\n')
-            .map((line) => `> ${line}`)
-            .join('\n')}\n\n`
-        );
-        store.composerModel.focus();
-      }}
+      enabled={store.session?.sessionState.current().canOpenSideSession === true}
+      renderSide={({ sideId, quote, onClose }) => (
+        <AcpSideSessionPane
+          key={sideId}
+          parent={store}
+          sideId={sideId}
+          quote={quote}
+          onClose={onClose}
+          renderComposer={(sideStore, slot, onViewerOpen) => (
+            <ComposerForStore store={sideStore} composerSlot={slot} onViewerOpen={onViewerOpen} />
+          )}
+          onAdd={(text) => store.addDraftQuote(text)}
+        />
+      )}
+      onAddToConversation={(text) => store.addDraftQuote(text)}
     >
       <div
         ref={rootRef}

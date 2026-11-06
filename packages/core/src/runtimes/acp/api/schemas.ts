@@ -13,6 +13,8 @@ export const acpStartInputSchema = z.object({
   sessionId: z.string().nullable(),
   options: providerOptionValuesSchema.optional(),
   initialQueue: z.array(promptInputSchema).optional(),
+  /** 临时旁支只引用当前 Host 上已激活的主会话。 */
+  sideParentConversationId: z.string().optional(),
   env: z.record(z.string(), z.string()).optional(),
 });
 export type AcpStartInputWire = z.infer<typeof acpStartInputSchema>;

@@ -289,3 +289,20 @@ function reportCleanupError(error: unknown): void {
 export const emdashSideQuestionParams = sideQuestionSchema.and(
   z.object({ sessionId: z.string().min(1) })
 );
+
+/** 临时分叉沿用普通 session 的工具、设置和通知，避开尚未完成的主 turn。 */
+export async function temporaryForkOptions(
+  client: Pick<SideQuestionClient, 'threadReadWithHistory' | 'getThreadSettings'>,
+  parent: string
+): Promise<Record<string, unknown>> {
+  const history = await deadline(client.threadReadWithHistory(parent));
+  const active = history.thread.turns.find((turn) => turn.status === 'inProgress');
+  const settings = client.getThreadSettings(parent);
+  return {
+    ephemeral: true,
+    ...(active ? { beforeTurnId: active.id } : {}),
+    ...(settings ? { model: settings.model, modelProvider: settings.modelProvider } : {}),
+    developerInstructions:
+      'This is a temporary side conversation. Answer the side question using prior conversation and the supplied quote as context. Do not continue the main task. Side answers are not shared with the main conversation.',
+  };
+}

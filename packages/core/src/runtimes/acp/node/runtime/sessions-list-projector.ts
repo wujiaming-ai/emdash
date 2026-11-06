@@ -36,6 +36,7 @@ export class SessionsListProjector {
   ) {}
 
   upsert(input: AcpStartInput, cell: SessionCell | null, state: SessionSummaryState): void {
+    if (input.sideParentConversationId) return;
     this.liveConversationIds.add(input.conversationId);
     const summary: Omit<SessionSummary, 'updatedAt'> = {
       conversationId: input.conversationId,

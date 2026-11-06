@@ -57,6 +57,8 @@ export interface AcpAgentApi {
   newSession(params: NewSessionRequest): Promise<NewSessionResponse>;
   /** Optional — only available when the agent advertises the `loadSession` capability. */
   loadSession?(params: LoadSessionRequest): Promise<LoadSessionResponse>;
+  /** 使用原生临时分叉，后续操作复用普通 ACP session。 */
+  forkSideSession?(params: LoadSessionRequest): Promise<NewSessionResponse>;
   prompt(params: PromptRequest): Promise<PromptResponse>;
   cancel(params: CancelNotification): Promise<void>;
   /** 独立旁支请求，不进入主会话 prompt 队列。 */
