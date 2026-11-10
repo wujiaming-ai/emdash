@@ -9,6 +9,8 @@ import type {
   InitializeResponse,
   LoadSessionRequest,
   LoadSessionResponse,
+  ListSessionsRequest,
+  ListSessionsResponse,
   NewSessionRequest,
   NewSessionResponse,
   PromptRequest,
@@ -53,6 +55,7 @@ export interface AcpProcessIo {
  * structurally — only the methods emdash actually uses are required here.
  */
 export interface AcpAgentApi {
+  listSessions?(params: ListSessionsRequest): Promise<ListSessionsResponse>;
   initialize(params: InitializeRequest): Promise<InitializeResponse>;
   newSession(params: NewSessionRequest): Promise<NewSessionResponse>;
   /** Optional — only available when the agent advertises the `loadSession` capability. */
@@ -63,6 +66,8 @@ export interface AcpAgentApi {
   cancel(params: CancelNotification): Promise<void>;
   /** 独立旁支请求，不进入主会话 prompt 队列。 */
   sideQuestion?(params: SideQuestionInput & { sessionId: string }): Promise<SideQuestionResult>;
+  /** 原生支持在运行中接收补充时，普通追加直接交给 agent 的安全边界队列。 */
+  steerOnPrompt?: boolean;
   /** 将补充消息交给当前 turn；false 表示调用方应保留普通队列。 */
   steerPrompt?(params: PromptRequest, priority: 'now' | 'next'): Promise<boolean>;
   /** Optional — only available when the agent advertises the `setSessionConfigOption` capability. */

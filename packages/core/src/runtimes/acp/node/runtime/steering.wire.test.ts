@@ -7,14 +7,17 @@ import { makeAcpHarness, makeStartInput } from '../acp-test-support';
 import { createAcpController } from '../api/controller';
 import { AcpRuntime } from './runtime';
 
-it.each(['boundary', 'now'] as const)(
+it.each(['boundary', 'now', 'automatic'] as const)(
   'routes %s through the real session and Wire layers',
   async (mode) => {
     const h = makeAcpHarness();
     const gate = deferred<{ stopReason: 'end_turn' }>();
     h.agent.prompt.mockReturnValueOnce(gate.promise);
     const steerPrompt = vi.fn().mockResolvedValue(true);
-    Object.assign(h.agent, { steerPrompt });
+    Object.assign(h.agent, {
+      steerPrompt,
+      ...(mode === 'automatic' ? { steerOnPrompt: true } : {}),
+    });
     const runtime = new AcpRuntime(h.deps);
     const wire = createTestWire(acpApiContract, createAcpController(runtime));
     try {
@@ -37,11 +40,12 @@ it.each(['boundary', 'now'] as const)(
         expect(
           await wire.client.sendQueuedPromptNow({ conversationId, id: promptId })
         ).toMatchObject({ success: true });
-      } else {
+      } else if (mode === 'boundary') {
         await h.client().extMethod!('_emdash/drainQueuedPrompts', {
           sessionId: started.data.sessionId,
         });
       }
+      await vi.waitFor(() => expect(steerPrompt).toHaveBeenCalledOnce());
       expect(steerPrompt).toHaveBeenCalledWith(
         { sessionId: started.data.sessionId, prompt: [{ type: 'text', text: 'follow up' }] },
         mode === 'now' ? 'now' : 'next'

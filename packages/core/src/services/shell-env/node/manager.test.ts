@@ -1,12 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type * as CaptureModule from './capture';
 
-const spawnSyncMock = vi.fn();
+const captureMock = vi.fn();
 const existsSyncMock = vi.fn();
 const userInfoMock = vi.fn();
 
-vi.mock('node:child_process', () => ({
-  spawnSync: spawnSyncMock,
+vi.mock('./capture', async (importOriginal) => ({
+  ...(await importOriginal<typeof CaptureModule>()),
+  captureShellEnv: captureMock,
 }));
+
+const { parseEnvOutput } = await import('./capture');
 
 vi.mock('node:fs', () => ({
   existsSync: existsSyncMock,
@@ -23,7 +27,7 @@ vi.mock('node:os', () => ({
 const { createShellEnvManager } = await import('./manager');
 
 beforeEach(() => {
-  spawnSyncMock.mockReset();
+  captureMock.mockReset();
   existsSyncMock.mockReset();
   userInfoMock.mockReset();
   userInfoMock.mockReturnValue({ shell: '/bin/bash' });
@@ -32,11 +36,13 @@ beforeEach(() => {
 
 describe('createShellEnvManager', () => {
   it('starts and awaits the initial capture from current()', async () => {
-    spawnSyncMock.mockReturnValue({
-      error: undefined,
-      status: 0,
-      stderr: '',
-      stdout: 'PATH=/shell/bin\nFOO=initial\n',
+    captureMock.mockReturnValue({
+      success: true,
+      data: {
+        env: parseEnvOutput('PATH=/shell/bin\nFOO=initial\n'),
+        source: 'login-shell',
+        capturedAt: 0,
+      },
     });
     const manager = createShellEnvManager({
       target: { PATH: '/worker/bin' },
@@ -47,15 +53,17 @@ describe('createShellEnvManager', () => {
       FOO: 'initial',
       PATH: '/shell/bin:/worker/bin',
     });
-    expect(spawnSyncMock).toHaveBeenCalledOnce();
+    expect(captureMock).toHaveBeenCalledOnce();
   });
 
   it('coalesces concurrent refreshes', async () => {
-    spawnSyncMock.mockReturnValue({
-      error: undefined,
-      status: 0,
-      stderr: '',
-      stdout: 'PATH=/usr/local/bin\nFOO=bar\n',
+    captureMock.mockReturnValue({
+      success: true,
+      data: {
+        env: parseEnvOutput('PATH=/usr/local/bin\nFOO=bar\n'),
+        source: 'login-shell',
+        capturedAt: 0,
+      },
     });
     const target: NodeJS.ProcessEnv = { PATH: '/usr/bin' };
     const manager = createShellEnvManager({
@@ -65,7 +73,7 @@ describe('createShellEnvManager', () => {
 
     await Promise.all([manager.refresh(), manager.refresh()]);
 
-    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+    expect(captureMock).toHaveBeenCalledTimes(1);
     expect(target.FOO).toBe('bar');
     expect(target.PATH).toBe('/usr/local/bin:/usr/bin');
     expect(manager.getUserShellEnv()).toMatchObject({
@@ -75,11 +83,13 @@ describe('createShellEnvManager', () => {
   });
 
   it('keeps runtime controls in the host env but excludes them from the user snapshot', async () => {
-    spawnSyncMock.mockReturnValue({
-      error: undefined,
-      status: 0,
-      stderr: '',
-      stdout: 'PATH=/shell/bin\nUSER_VALUE=kept\n',
+    captureMock.mockReturnValue({
+      success: true,
+      data: {
+        env: parseEnvOutput('PATH=/shell/bin\nUSER_VALUE=kept\n'),
+        source: 'login-shell',
+        capturedAt: 0,
+      },
     });
     const target: NodeJS.ProcessEnv = {
       PATH: '/worker/bin',
@@ -99,11 +109,13 @@ describe('createShellEnvManager', () => {
   });
 
   it('preserves a runtime-named variable when the login shell explicitly exports it', async () => {
-    spawnSyncMock.mockReturnValue({
-      error: undefined,
-      status: 0,
-      stderr: '',
-      stdout: 'PATH=/shell/bin\nNODE_ENV=development\n',
+    captureMock.mockReturnValue({
+      success: true,
+      data: {
+        env: parseEnvOutput('PATH=/shell/bin\nNODE_ENV=development\n'),
+        source: 'login-shell',
+        capturedAt: 0,
+      },
     });
     const target: NodeJS.ProcessEnv = { PATH: '/worker/bin', NODE_ENV: 'production' };
     const manager = createShellEnvManager({ target });
@@ -115,11 +127,13 @@ describe('createShellEnvManager', () => {
   });
 
   it('retains the last snapshot until an in-flight refresh publishes atomically', async () => {
-    spawnSyncMock.mockReturnValue({
-      error: undefined,
-      status: 0,
-      stderr: '',
-      stdout: 'PATH=/tools/old\nUSER_VALUE=before-refresh\n',
+    captureMock.mockReturnValue({
+      success: true,
+      data: {
+        env: parseEnvOutput('PATH=/tools/old\nUSER_VALUE=before-refresh\n'),
+        source: 'login-shell',
+        capturedAt: 0,
+      },
     });
     const manager = createShellEnvManager({
       target: { PATH: '/worker/bin' },
@@ -127,11 +141,13 @@ describe('createShellEnvManager', () => {
     });
     await manager.refresh();
 
-    spawnSyncMock.mockReturnValue({
-      error: undefined,
-      status: 0,
-      stderr: '',
-      stdout: 'PATH=/tools/new\nUSER_VALUE=after-refresh\n',
+    captureMock.mockReturnValue({
+      success: true,
+      data: {
+        env: parseEnvOutput('PATH=/tools/new\nUSER_VALUE=after-refresh\n'),
+        source: 'login-shell',
+        capturedAt: 0,
+      },
     });
     const refresh = manager.refresh();
 
@@ -148,11 +164,9 @@ describe('createShellEnvManager', () => {
 
   it('logs and keeps the existing env when capture fails', async () => {
     const warn = vi.fn();
-    spawnSyncMock.mockReturnValue({
-      error: new Error('spawn failed'),
-      status: null,
-      stderr: '',
-      stdout: '',
+    captureMock.mockReturnValue({
+      success: false,
+      error: { type: 'capture-failed', shell: '/bin/bash', message: 'spawn failed' },
     });
     const target: NodeJS.ProcessEnv = { PATH: '/usr/bin' };
     const manager = createShellEnvManager({
@@ -175,11 +189,13 @@ describe('createShellEnvManager', () => {
   });
 
   it('retains the last known-good snapshot when a later refresh fails', async () => {
-    spawnSyncMock.mockReturnValue({
-      error: undefined,
-      status: 0,
-      stderr: '',
-      stdout: 'PATH=/tools/good\nUSER_VALUE=known-good\n',
+    captureMock.mockReturnValue({
+      success: true,
+      data: {
+        env: parseEnvOutput('PATH=/tools/good\nUSER_VALUE=known-good\n'),
+        source: 'login-shell',
+        capturedAt: 0,
+      },
     });
     const manager = createShellEnvManager({
       target: { PATH: '/worker/bin' },
@@ -187,11 +203,9 @@ describe('createShellEnvManager', () => {
     });
     await manager.refresh();
 
-    spawnSyncMock.mockReturnValue({
-      error: new Error('refresh failed'),
-      status: null,
-      stderr: '',
-      stdout: '',
+    captureMock.mockReturnValue({
+      success: false,
+      error: { type: 'capture-failed', shell: '/bin/bash', message: 'refresh failed' },
     });
     await manager.refresh();
 
@@ -200,4 +214,44 @@ describe('createShellEnvManager', () => {
       USER_VALUE: 'known-good',
     });
   });
+});
+
+// 首次失败后应限频恢复，不能永久停留在 GUI 的精简 PATH。
+it('retries a failed initial capture on demand after the cooldown', async () => {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(0);
+  captureMock.mockReturnValue({
+    success: false,
+    error: { type: 'capture-failed', shell: '/bin/bash', message: 'timeout' },
+  });
+  const manager = createShellEnvManager({ target: { PATH: '/usr/bin' } });
+  try {
+    await manager.current();
+    clock.mockReturnValue(4_999);
+    await manager.current();
+    expect(captureMock).toHaveBeenCalledTimes(1);
+    clock.mockReturnValue(5_000);
+    captureMock.mockReturnValue({
+      success: true,
+      data: { env: { PATH: '/opt/homebrew/bin' }, source: 'login-shell', capturedAt: 0 },
+    });
+    const results = await Promise.all([manager.current(), manager.current()]);
+    expect(results[0].PATH).toBe('/opt/homebrew/bin:/usr/bin');
+    expect(results[1]).toEqual(results[0]);
+    expect(captureMock).toHaveBeenCalledTimes(2);
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+it('allows explicit refresh to recover immediately without waiting for the cooldown', async () => {
+  captureMock.mockResolvedValueOnce({ success: false, error: { message: 'timeout' } });
+  const manager = createShellEnvManager({ target: { PATH: '/usr/bin' } });
+  await manager.current();
+  captureMock.mockResolvedValueOnce({
+    success: true,
+    data: { env: { PATH: '/recovered/bin' }, source: 'login-shell', capturedAt: 0 },
+  });
+  await manager.refresh();
+  expect((await manager.current()).PATH).toBe('/recovered/bin:/usr/bin');
+  expect(captureMock).toHaveBeenCalledTimes(2);
 });

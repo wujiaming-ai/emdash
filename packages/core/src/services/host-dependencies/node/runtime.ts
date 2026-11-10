@@ -197,14 +197,16 @@ export class HostDependenciesRuntime {
   ): Promise<Result<HostDependencySnapshot, HostDependencyError>> {
     if (id && !this.definitions.has(id)) return err({ type: 'unknown-dependency', id });
 
-    if (id && peek(this.current) !== undefined) {
-      const view = await this.settleView(id, options.mutationIds);
-      if (!view.success) return view;
-      const settled = peek(this.current);
-      if (settled) return ok(settled);
-    }
-
     try {
+      // 用户主动重新检测时先刷新环境；定时快照探测不重复启动登录 shell。
+      await this.deps.exec.refreshShellEnv?.();
+      if (id && peek(this.current) !== undefined) {
+        const view = await this.settleView(id, options.mutationIds);
+        if (!view.success) return view;
+        const settled = peek(this.current);
+        if (settled) return ok(settled);
+      }
+
       await this.current.refresh({ mutationIds: options.mutationIds });
       const snapshot = peek(this.current);
       if (!snapshot)

@@ -26,7 +26,7 @@ index 593b6d5992de6fedb8e8daee7f98dd7bbcf5b4b6..aa67eaca326663fe1176b621cfaa2cdc
  export declare class ClaudeAcpAgent {
      sessions: {
 diff --git a/dist/acp-agent.js b/dist/acp-agent.js
-index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfadb82c82aa 100644
+index beba2ff4f21e6805099c55215345a95a046c608a..d7d67b7a5697c954c090be8d35cb3393000d7d33 100644
 --- a/dist/acp-agent.js
 +++ b/dist/acp-agent.js
 @@ -1,3 +1,4 @@
@@ -63,7 +63,36 @@ index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfad
                  },
                  goal: {
                      version: GOAL_EXTENSION_VERSION,
-@@ -1586,6 +1595,7 @@ export class ClaudeAcpAgent {
+@@ -1199,9 +1208,18 @@ export class ClaudeAcpAgent {
+         return result;
+     }
+     async listSessions(params) {
+-        const sdk_sessions = await listSessions({ dir: params.cwd ?? undefined });
++        const pageSize = params._meta?.["emdash.dev/history-page-size"];
++        const paged = pageSize === 20;
++        const offset = paged && params.cursor ? Number(params.cursor) : 0;
++        if (paged && (!Number.isSafeInteger(offset) || offset < 0)) {
++            throw RequestError.invalidParams(undefined, "Invalid history cursor");
++        }
++        const sdk_sessions = await listSessions({
++            dir: params.cwd ?? undefined,
++            ...(paged ? { limit: 21, offset } : {}),
++        });
+         const sessions = [];
+-        for (const session of sdk_sessions) {
++        for (const session of paged ? sdk_sessions.slice(0, 20) : sdk_sessions) {
+             if (!session.cwd)
+                 continue;
+             sessions.push({
+@@ -1213,6 +1231,7 @@ export class ClaudeAcpAgent {
+         }
+         return {
+             sessions,
++            ...(paged ? { nextCursor: sdk_sessions.length > 20 ? String(offset + 20) : null } : {}),
+         };
+     }
+     /**
+@@ -1586,6 +1605,7 @@ export class ClaudeAcpAgent {
          if (session.queryClosed) {
              throw RequestError.internalError(undefined, SESSION_ENDED_MESSAGE);
          }
@@ -71,7 +100,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfad
          const subscriptionGuard = this.runClaudeSubscriptionGuard(params.sessionId, session);
          if (subscriptionGuard)
              await subscriptionGuard;
-@@ -1944,7 +1954,7 @@ export class ClaudeAcpAgent {
+@@ -1944,7 +1964,7 @@ export class ClaudeAcpAgent {
          // Deliver into the running turn rather than queuing behind it as a fresh
          // prompt would.
          userMessage.priority =
@@ -80,7 +109,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfad
          // Mark before the push and in the same synchronous section as the in-flight
          // check: the interrupt can have the CLI finalizing the aborted cycle by the
          // time the consumer next runs, and an unmarked result would settle the turn
-@@ -1960,7 +1970,10 @@ export class ClaudeAcpAgent {
+@@ -1960,7 +1980,10 @@ export class ClaudeAcpAgent {
          }
          session.input.push(userMessage);
          const firstText = params.prompt[0]?.type === "text" ? params.prompt[0].text : "";
@@ -92,7 +121,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfad
          return { outcome: "injected" };
      }
      async stopAsyncTask(params) {
-@@ -2071,6 +2084,7 @@ export class ClaudeAcpAgent {
+@@ -2071,6 +2094,7 @@ export class ClaudeAcpAgent {
              logError: (message, error) => this.logger.error(message, error),
          });
          session.contextCompaction = compaction;
@@ -100,7 +129,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfad
          const sendUpdate = async (notification) => {
              const { update } = notification;
              const claudeMeta = update._meta?.claudeCode;
-@@ -2162,17 +2176,13 @@ export class ClaudeAcpAgent {
+@@ -2162,17 +2186,13 @@ export class ClaudeAcpAgent {
          };
          // ACP's usage_update has no model field, so the model the usage belongs
          // to rides in `_meta` alongside the other `_claude/*` keys.
@@ -125,7 +154,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfad
          const internalErrorForClient = (data, rawDetail) => RequestError.internalError(data, supportsAirSessionFailures(this.clientCapabilities) ? undefined : rawDetail);
          const ensureUsageMarkdown = (turn) => {
              if (!turn.isUsageCommand || !turn.usageMarkdownAbort)
-@@ -2218,6 +2228,7 @@ export class ClaudeAcpAgent {
+@@ -2218,6 +2238,7 @@ export class ClaudeAcpAgent {
           *  interrupt (no orphan emitted) — drop the stale count so a later echo-less
           *  result isn't wrongly skipped. */
          const activateTurn = (turn) => {
@@ -133,7 +162,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfad
              session.activeTurn = turn;
              session.cancelled = false;
              compaction.resume();
-@@ -3792,6 +3803,16 @@ export class ClaudeAcpAgent {
+@@ -3792,6 +3813,16 @@ export class ClaudeAcpAgent {
                                          }),
                                      }),
                                  });
@@ -150,7 +179,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfad
                              }
                              if (session.cancelled) {
                                  session.pendingExitPlanModeInterruption = undefined;
-@@ -4657,6 +4678,7 @@ export class ClaudeAcpAgent {
+@@ -4657,6 +4688,7 @@ export class ClaudeAcpAgent {
                          break;
                      }
                      case "conversation_reset": {
@@ -158,7 +187,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfad
                          // The SDK has switched to a fresh conversation, whose Task* IDs
                          // and task store are independent of the previous transcript.
                          // Clear both the in-memory snapshot and the client's visible plan
-@@ -5196,6 +5218,7 @@ export class ClaudeAcpAgent {
+@@ -5196,6 +5228,7 @@ export class ClaudeAcpAgent {
              await this.sessionModes.publishCurrent(params.sessionId, effectiveValue);
          }
          else if (params.configId === MODEL_CONFIG_ID) {
@@ -166,7 +195,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfad
              await this.sessions[params.sessionId].query.setModel(resolvedValue);
          }
          // Effort SDK sync is handled inside applyConfigOptionValue so that direct
-@@ -5846,6 +5869,7 @@ export class ClaudeAcpAgent {
+@@ -5846,6 +5879,7 @@ export class ClaudeAcpAgent {
              // carries no "1m" token.
              const newModelInfo = session.modelInfos.find((m) => m.value === value);
              if (session.models.currentModelId !== value) {
@@ -174,7 +203,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfad
                  // Seed the new model's context window WITHOUT any IPC on the switch
                  // path: cached authoritative value if we've already learned it (from a
                  // prior turn's `result.modelUsage`), else the text heuristic, else the
-@@ -5861,6 +5885,14 @@ export class ClaudeAcpAgent {
+@@ -5861,6 +5895,14 @@ export class ClaudeAcpAgent {
                  const seeded = immediateContextWindow(session.providerCacheKey, value, newModelInfo);
                  session.contextWindowSize = seeded.size;
                  session.contextWindowAuthoritative = seeded.authoritative;
@@ -189,7 +218,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfad
              }
              session.models = { ...session.models, currentModelId: value };
              const modeDowngraded = await this.sessionModes.reconcileForModel(session, newModelInfo);
-@@ -6422,8 +6454,24 @@ export class ClaudeAcpAgent {
+@@ -6422,8 +6464,24 @@ export class ClaudeAcpAgent {
              tools,
              hooks: {
                  ...userProvidedOptions?.hooks,
@@ -214,7 +243,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfad
                      {
                          hooks: [
                              createPostToolUseHook({
-@@ -6669,27 +6717,7 @@ export class ClaudeAcpAgent {
+@@ -6669,27 +6727,7 @@ export class ClaudeAcpAgent {
              if (useRecommendedValue && typeof initialEffort?.currentValue === "string") {
                  await q.applyFlagSettings({ effortLevel: toSdkEffortLevel(initialEffort.currentValue) });
              }
@@ -243,7 +272,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfad
              const seededWindow = immediateContextWindow(providerCacheKey, models.currentModelId, allowlistedModelInfo);
              this.sessions[sessionId] = {
                  query: q,
-@@ -6732,6 +6760,7 @@ export class ClaudeAcpAgent {
+@@ -6732,6 +6770,7 @@ export class ClaudeAcpAgent {
                  abortController,
                  emitRawSDKMessages: sessionMeta?.claudeCode?.emitRawSDKMessages ?? false,
                  forwardSubagentText,
@@ -251,7 +280,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfad
                  contextWindowSize: seededWindow.size,
                  contextWindowAuthoritative: seededWindow.authoritative,
                  providerCacheKey,
-@@ -6752,6 +6781,7 @@ export class ClaudeAcpAgent {
+@@ -6752,6 +6791,7 @@ export class ClaudeAcpAgent {
                  fileChangeReporter,
              };
              timing.phase("register");
@@ -259,7 +288,7 @@ index beba2ff4f21e6805099c55215345a95a046c608a..1aa73de5b687a1ab4f027f207280dfad
              return {
                  sessionId,
                  modes,
-@@ -6763,6 +6793,20 @@ export class ClaudeAcpAgent {
+@@ -6763,6 +6803,20 @@ export class ClaudeAcpAgent {
              throw error;
          }
      }

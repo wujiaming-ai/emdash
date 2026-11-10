@@ -1,4 +1,6 @@
 import { observer } from 'mobx-react-lite';
+import { StackedAgentLogos } from '@core/features/agents/contributions/browser/stacked-agent-logos';
+import { taskConversationStats } from '@core/features/conversations/api/browser/conversation-selectors';
 import { projectViewDef } from '@core/features/projects/contributions/views';
 import { useAppSettingsKey } from '@core/features/settings/api/browser/use-app-settings-key';
 import {
@@ -118,8 +120,9 @@ export const SidebarTaskItem = observer(function SidebarTaskItem({
       >
         <SidebarMenuAction
           aria-label={`Open task ${taskName || 'task'}`}
-          className="gap-1 overflow-hidden"
+          className="gap-2 overflow-hidden"
         >
+          <StackedAgentLogos stats={taskConversationStats(task)} appearance="plain" />
           <span
             className={cn(
               'min-w-0 truncate text-left transition-colors',

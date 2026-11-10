@@ -322,6 +322,18 @@ export class TaskComposition {
     if (this._acquiredWorkspaceId) workspaceRegistry.activate(this._acquiredWorkspaceId);
   }
 
+  /** 等待已有布局恢复后再定位会话，避免被默认标签页覆盖。 */
+  async openConversation(conversationId: string): Promise<void> {
+    await this.hydrateAndSeedPaneLayout();
+    const conversation = this._conversations.conversations.get(conversationId);
+    if (!conversation) throw new Error('The conversation is not available in this task.');
+    this.paneLayout.open(
+      conversation.data.type === 'acp' ? 'acp-chat' : 'conversation',
+      { conversationId },
+      { preview: false }
+    );
+  }
+
   private syncWorkspace(): void {
     const {
       workspaceId,

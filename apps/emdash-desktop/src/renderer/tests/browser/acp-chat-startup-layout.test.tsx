@@ -9,6 +9,7 @@ import type {
   TranscriptTurn,
 } from '@emdash/core/runtimes/acp/api/client';
 import '@emdash/chat-ui/style.css';
+import '@renderer/index.css';
 import { ok } from '@emdash/shared';
 import { deferred } from '@emdash/shared/testing';
 import type { PromptEditorModel } from '@emdash/ui/react/components';

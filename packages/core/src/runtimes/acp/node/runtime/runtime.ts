@@ -33,17 +33,20 @@ import type {
   SideQuestionInput,
   SideQuestionResult,
 } from '#services/agent-plugins/api/side-question';
+import { NativeHistory } from './native-history';
 import { SessionManager } from './session-manager';
 import { TerminalLiveRegistry } from './terminal-live-registry';
 import type { AcpRuntimeDeps, AcpStartInput } from './types';
 
 export class AcpRuntime {
+  readonly nativeHistory: NativeHistory;
   readonly terminals: AgentTerminalManager;
   readonly connections: AcpConnectionSource;
   readonly manager: SessionManager;
   private readonly terminalLiveRegistry: TerminalLiveRegistry;
 
   constructor(private readonly deps: AcpRuntimeDeps) {
+    this.nativeHistory = new NativeHistory(deps);
     let manager: SessionManager | null = null;
     this.terminalLiveRegistry = new TerminalLiveRegistry((conversationId) =>
       manager?.syncTerminals(conversationId)
@@ -201,6 +204,7 @@ export class AcpRuntime {
   }
 
   async dispose(): Promise<void> {
+    await this.nativeHistory.dispose();
     await this.manager.dispose();
     await this.killAllTerminals();
     await this.connections.dispose();

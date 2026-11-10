@@ -1,8 +1,7 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
-import { err, ok, type Result } from '@emdash/shared';
-import { recordSpawn } from '@emdash/shared/perf';
+import { ok, type Result } from '@emdash/shared';
+import { probeShellEnv } from './probe';
 import { SHELL_ENV_CAPTURE_GUARD, type ShellEnvCapture, type ShellEnvCaptureError } from './types';
 
 export type CaptureShellEnvOptions = {
@@ -40,38 +39,14 @@ export async function captureShellEnv(
   }
 
   const shell = resolveLoginShell(baseEnv);
-  const shellEnvProbeOptions = {
-    encoding: 'utf8' as const,
-    timeout: options.timeoutMs ?? 5_000,
-    maxBuffer: 1024 * 1024,
-    env: {
-      ...baseEnv,
-      ...SHELL_ENV_CAPTURE_GUARD,
-    },
-    detached: true,
-    stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
-  };
-  recordSpawn('shell', shell);
-  const result = spawnSync(shell, ['-ilc', 'env'], shellEnvProbeOptions);
-
-  if (result.error) {
-    return err({
-      type: 'capture-failed',
-      shell,
-      message: result.error.message,
-    });
-  }
-
-  if (typeof result.status === 'number' && result.status !== 0) {
-    return err({
-      type: 'capture-failed',
-      shell,
-      message: result.stderr.trim() || `shell env capture exited with status ${result.status}`,
-    });
-  }
-
+  const result = await probeShellEnv(
+    shell,
+    { ...baseEnv, ...SHELL_ENV_CAPTURE_GUARD },
+    options.timeoutMs ?? 15_000
+  );
+  if (!result.success) return result;
   return ok({
-    env: withoutCaptureGuard(parseEnvOutput(result.stdout)),
+    env: withoutCaptureGuard(parseEnvOutput(result.data)),
     source: 'login-shell',
     capturedAt: now(),
   });

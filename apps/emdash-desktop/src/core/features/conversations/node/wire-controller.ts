@@ -10,7 +10,7 @@ import { err, ok, type Result } from '@emdash/shared';
 import { createKeyedLanes } from '@emdash/shared/concurrency';
 import type { Logger } from '@emdash/shared/logger';
 import type { LiveSource } from '@emdash/wire/rpc';
-import { createController, type CallMeta, type Controller } from '@emdash/wire/rpc';
+import { createController, WireError, type CallMeta, type Controller } from '@emdash/wire/rpc';
 import { and, eq } from 'drizzle-orm';
 import { conversationRegistryTable as conversations } from '@core/features/conversations/api/node/registry';
 import { createConversationOperations } from '@core/features/conversations/node/controller';
@@ -40,6 +40,7 @@ import {
   type ConversationsRuntimeResolveError as RuntimeResolveError,
 } from '../api/runtime-adapter';
 import { conversationWireEvents } from './event-host';
+import { openNativeHistory } from './native-history';
 import { getProviderSettingsService } from './provider-settings-service';
 
 type ConversationRuntimeTarget = Readonly<{
@@ -94,6 +95,7 @@ export function createConversationsWireController(
       ));
   const hooks = options.hooks ?? createDefaultRuntimeHooks(options);
   const configurationChanges = createKeyedLanes();
+  const nativeHistoryOpens = createKeyedLanes();
   const conversationOperations = createConversationOperations({
     db: options.db,
     taskSessions: options.taskSessions,
@@ -149,6 +151,28 @@ export function createConversationsWireController(
 
   const settings = getProviderSettingsService(options.db);
   return createController(conversationsContract, {
+    nativeHistory: {
+      list: async ({ host, providerId, cursor }) => {
+        const client = await options.runtimes.client(parseHostRef(host));
+        if (!client.success) throw new Error(client.error.message);
+        const env = await options.getProviderEnv?.(providerId);
+        try {
+          return await client.data.acp.nativeHistory.list({ providerId, cursor, env });
+        } catch (error) {
+          if (error instanceof WireError && error.code === 'UNKNOWN_PROCEDURE')
+            throw new Error('Update the workspace server to browse CLI history.');
+          throw error;
+        }
+      },
+      open: ({ host, selectionId }, meta) =>
+        nativeHistoryOpens.run(host, meta.signal ?? new AbortController().signal, async () => {
+          const hostRef = parseHostRef(host);
+          const client = await options.runtimes.client(hostRef);
+          if (!client.success) throw new Error(client.error.message);
+          const session = await client.data.acp.nativeHistory.resolve({ selectionId });
+          return openNativeHistory(options.db, client.data, hostRef, session);
+        }),
+    },
     providerSettings: {
       model: settings.model,
       patch: ({ patch, ...key }) => settings.patch(key, patch),

@@ -3,10 +3,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const spawnSyncMock = vi.fn();
+const probeMock = vi.fn();
 
-vi.mock('node:child_process', () => ({
-  spawnSync: spawnSyncMock,
+vi.mock('../../../../../packages/core/src/services/shell-env/node/probe', () => ({
+  probeShellEnv: probeMock,
 }));
 
 const {
@@ -19,12 +19,10 @@ const {
 const originalPath = process.env.PATH;
 
 function mockShellCapture(stdout: string): void {
-  spawnSyncMock.mockImplementationOnce(() => {
+  probeMock.mockImplementationOnce(() => {
     return {
-      error: undefined,
-      status: 0,
-      stderr: '',
-      stdout,
+      success: true,
+      data: stdout,
     };
   });
 }
@@ -75,17 +73,15 @@ describe('refreshUserEnv (runtime env boundary)', () => {
     const previousNodeEnv = process.env.NODE_ENV;
     process.env.ELECTRON_RUN_AS_NODE = '1';
     process.env.NODE_ENV = 'production';
-    spawnSyncMock.mockReset();
+    probeMock.mockReset();
     mockShellCapture('PATH=/usr/local/bin:/usr/bin\nUSER_VALUE=kept\n');
 
     try {
       await refreshUserEnv();
 
-      const probeOptions = spawnSyncMock.mock.calls[0]?.[2] as
-        | { env?: NodeJS.ProcessEnv }
-        | undefined;
-      expect(probeOptions?.env?.ELECTRON_RUN_AS_NODE).toBeUndefined();
-      expect(probeOptions?.env?.NODE_ENV).toBeUndefined();
+      const probeOptions = probeMock.mock.calls[0]?.[1] as NodeJS.ProcessEnv | undefined;
+      expect(probeOptions?.ELECTRON_RUN_AS_NODE).toBeUndefined();
+      expect(probeOptions?.NODE_ENV).toBeUndefined();
       expect(process.env.ELECTRON_RUN_AS_NODE).toBe('1');
       expect(process.env.NODE_ENV).toBe('production');
       expect(getUserShellEnv()).toMatchObject({ USER_VALUE: 'kept' });
@@ -115,7 +111,7 @@ describe('refreshUserEnv (AppImage env scrub)', () => {
   > = {};
 
   beforeEach(() => {
-    spawnSyncMock.mockReset();
+    probeMock.mockReset();
     mockShellCapture('');
     for (const key of [...SCRUBBED_KEYS, ...PATH_LIKE_KEYS]) {
       savedEnv[key] = process.env[key];
@@ -130,7 +126,7 @@ describe('refreshUserEnv (AppImage env scrub)', () => {
   });
 
   it('strips AppImage runtime vars and /tmp/.mount_* path entries from the probe shell env and final PATH', async () => {
-    spawnSyncMock.mockReset();
+    probeMock.mockReset();
     mockShellCapture('PATH=/usr/local/bin:/usr/bin\n');
     process.env.APPIMAGE = '/home/user/emdash.AppImage';
     process.env.APPDIR = '/tmp/.mount_emdashTest';
@@ -144,18 +140,9 @@ describe('refreshUserEnv (AppImage env scrub)', () => {
 
     await refreshUserEnv();
 
-    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
-    const opts = spawnSyncMock.mock.calls[0]?.[2] as
-      | {
-          detached?: boolean;
-          env?: NodeJS.ProcessEnv;
-          stdio?: unknown;
-        }
-      | undefined;
-    expect(opts?.env).toBeDefined();
-    expect(opts?.detached).toBe(true);
-    expect(opts?.stdio).toEqual(['ignore', 'pipe', 'pipe']);
-    const probeEnv = opts!.env!;
+    expect(probeMock).toHaveBeenCalledTimes(1);
+    const probeEnv = probeMock.mock.calls[0]?.[1] as NodeJS.ProcessEnv;
+    expect(probeEnv).toBeDefined();
     for (const key of SCRUBBED_KEYS) {
       expect(probeEnv[key]).toBeUndefined();
     }

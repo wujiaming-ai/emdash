@@ -15,14 +15,14 @@ export function createShellEnvManager(options: CreateShellEnvManagerOptions = {}
   const target = options.target ?? process.env;
   const userEnv = stringEnv(buildUserShellEnvSeed(options.baseEnvForProbe?.() ?? target));
   let inFlight: Promise<void> | undefined;
-  let captureStarted = false;
+  let retryAt = 0;
   let hasGoodSnapshot = false;
 
   const refresh = (): Promise<void> => {
-    captureStarted = true;
     inFlight ??= refreshShellEnv(target, userEnv, hasGoodSnapshot, options)
       .then((succeeded) => {
         if (succeeded) hasGoodSnapshot = true;
+        else retryAt = Date.now() + 5_000;
       })
       .finally(() => {
         inFlight = undefined;
@@ -33,7 +33,8 @@ export function createShellEnvManager(options: CreateShellEnvManagerOptions = {}
   return {
     env: target,
     async current() {
-      if (!captureStarted) await refresh();
+      // 仅首次成功前按需重试；并发请求共享采集，显式刷新不受冷却限制。
+      if (!hasGoodSnapshot && Date.now() >= retryAt) await refresh();
       else await inFlight;
       return { ...userEnv };
     },

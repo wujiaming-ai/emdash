@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import tailwindcss from '@tailwindcss/vite';
 import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
 import { startLspFixture, stopLspFixture } from './tooling/vitest/lsp-browser-commands';
@@ -125,6 +126,8 @@ export default defineConfig({
               extends: true as const,
               // Prebundle before mounting query-backed React forms. A late JSX
               // optimization reload can otherwise split their provider contexts.
+              // 布局测试使用与桌面 renderer 相同的 Tailwind 编译，避免只加载原始指令。
+              plugins: [tailwindcss()],
               optimizeDeps: {
                 include: ['react/jsx-dev-runtime', '@tanstack/react-query', '@tiptap/suggestion'],
               },

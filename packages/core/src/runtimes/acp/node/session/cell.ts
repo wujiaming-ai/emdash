@@ -438,7 +438,7 @@ export class SessionCell {
     this.transcript.pushEvent({
       kind: 'notification',
       title: 'Message delivery unconfirmed',
-      text: 'The additional message may have reached Claude. Check the response before resending.',
+      text: 'The additional message may have reached the agent. Check the response before resending.',
     });
     this.emitTranscriptChanged();
   }
@@ -666,6 +666,11 @@ export class SessionCell {
     );
     if (!started) {
       acceptance?.onAccepted({ queued: true });
+      if (this.deps.agent.steerOnPrompt && this.machine.phase.kind === 'working') {
+        const delivered = await this.sendQueuedPromptNow(prompt.id, 'next');
+        if (!delivered.success)
+          this.deps.logger.warn('Running-turn supplement failed', { error: delivered.error });
+      }
       return ok({ queued: true });
     }
 

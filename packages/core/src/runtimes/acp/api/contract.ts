@@ -1,4 +1,11 @@
-import { defineContract, fallible, liveLog, liveModel, liveState } from '@emdash/wire/rpc';
+import {
+  defineContract,
+  fallible,
+  liveLog,
+  liveModel,
+  liveState,
+  procedure,
+} from '@emdash/wire/rpc';
 import { z } from 'zod';
 import { terminalStateSchema } from '#runtimes/acp/api/models';
 import { agentStateSchema } from '#runtimes/acp/api/models/agents';
@@ -26,6 +33,11 @@ import {
   acpTerminateErrorSchema,
 } from './errors';
 import {
+  nativeHistoryInputSchema,
+  nativeHistoryPageSchema,
+  nativeSessionSchema,
+} from './native-history';
+import {
   acpStartInputSchema,
   acpSessionStartModeSchema,
   cancelTurnCommandSchema,
@@ -51,6 +63,17 @@ const sessionKeySchema = z.object({ conversationId: z.string() });
 const terminalOutputKeySchema = z.object({ terminalId: z.string() });
 
 export const acpApiContract = defineContract({
+  nativeHistory: defineContract({
+    list: procedure({
+      input: nativeHistoryInputSchema,
+      output: nativeHistoryPageSchema,
+      callTimeoutMs: 45_000,
+    }),
+    resolve: procedure({
+      input: z.object({ selectionId: z.string().uuid() }),
+      output: nativeSessionSchema,
+    }),
+  }),
   attach: fallible({
     input: acpStartInputSchema,
     data: z.object({ sessionId: z.string().nullable() }),

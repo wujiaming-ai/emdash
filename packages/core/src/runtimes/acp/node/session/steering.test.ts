@@ -221,3 +221,51 @@ it('does not silently consume a queued prompt without a foreground turn', async 
   expect(t.steerPrompt).not.toHaveBeenCalled();
   t.cell.dispose();
 });
+
+it('automatically submits normal Codex supplements without a tool callback or cancellation', async () => {
+  const t = fixture();
+  Object.assign(t.agent, { steerOnPrompt: true });
+  const running = t.cell.prompt({ text: 'first' });
+  await vi.waitFor(() => expect(t.agent.prompt).toHaveBeenCalledOnce());
+  const turnId = t.cell.sessionState.activeTurnId;
+  await t.cell.prompt({ text: 'supplement' });
+  expect(t.steerPrompt).toHaveBeenCalledWith(
+    expect.objectContaining({ prompt: [{ type: 'text', text: 'supplement' }] }),
+    'next'
+  );
+  expect(t.agent.cancel).not.toHaveBeenCalled();
+  expect(t.agent.prompt).toHaveBeenCalledOnce();
+  expect(t.cell.sessionState.activeTurnId).toBe(turnId);
+  expect(t.cell.sessionState.queuedPrompts).toEqual([]);
+  t.first.resolve({ stopReason: 'end_turn' });
+  await running;
+});
+
+it('keeps explicitly queued input pending until Send now is selected', async () => {
+  const t = fixture();
+  Object.assign(t.agent, { steerOnPrompt: true });
+  const running = t.cell.prompt({ text: 'first' });
+  await vi.waitFor(() => expect(t.agent.prompt).toHaveBeenCalledOnce());
+  t.cell.queuePrompt({ text: 'explicit queue' }, 'explicit');
+  expect(t.steerPrompt).not.toHaveBeenCalled();
+  expect((await t.cell.sendQueuedPromptNow('explicit')).success).toBe(true);
+  expect(t.steerPrompt).toHaveBeenCalledOnce();
+  expect(t.agent.cancel).not.toHaveBeenCalled();
+  t.first.resolve({ stopReason: 'end_turn' });
+  await running;
+});
+
+it('hands a late automatic supplement back to the ordinary queue exactly once', async () => {
+  const t = fixture();
+  Object.assign(t.agent, { steerOnPrompt: true });
+  t.steerPrompt.mockResolvedValue(false);
+  const running = t.cell.prompt({ text: 'first' });
+  await vi.waitFor(() => expect(t.agent.prompt).toHaveBeenCalledOnce());
+  await t.cell.prompt({ text: 'second' });
+  expect(t.cell.sessionState.queuedPrompts.map((item) => item.text)).toEqual(['second']);
+  t.first.resolve({ stopReason: 'end_turn' });
+  await running;
+  await vi.waitFor(() => expect(t.agent.prompt).toHaveBeenCalledTimes(2));
+  expect(t.steerPrompt).toHaveBeenCalledOnce();
+  expect(t.agent.cancel).not.toHaveBeenCalled();
+});

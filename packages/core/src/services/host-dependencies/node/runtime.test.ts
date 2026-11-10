@@ -425,6 +425,42 @@ describe('HostDependenciesRuntime snapshot query', () => {
     runtime.dispose();
   });
 
+  it('refreshes shell environment before re-detecting a missing CLI', async () => {
+    const { exec, setInstalled } = createFakeExec({});
+    const runtime = createRuntime(exec);
+    const lease = runtime.liveHost().acquireState(undefined, 'current');
+    const source = await lease.ready();
+    expect((await snapshotOf(source)).dependencies['fake-agent']?.status).toBe('missing');
+    vi.mocked(exec.refreshShellEnv!).mockImplementation(async () => {
+      setInstalled(true);
+    });
+    const result = await runtime.refresh('fake-agent');
+    expect(result.success && result.data.dependencies['fake-agent']?.status).toBe('available');
+    await lease.release();
+    runtime.dispose();
+  });
+
+  it('returns shell refresh errors without probing with stale environment', async () => {
+    const { exec } = createFakeExec({});
+    vi.mocked(exec.refreshShellEnv!).mockRejectedValueOnce(new Error('refresh failed'));
+    const runtime = createRuntime(exec);
+    expect(await runtime.refresh()).toEqual({
+      success: false,
+      error: { type: 'io', message: 'refresh failed' },
+    });
+    expect(exec.exec).not.toHaveBeenCalled();
+    runtime.dispose();
+  });
+
+  it('supports execution contexts without shell refresh', async () => {
+    const { exec } = createFakeExec({ initiallyInstalled: true });
+    delete exec.refreshShellEnv;
+    const runtime = createRuntime(exec);
+    const result = await runtime.refresh();
+    expect(result.success && result.data.dependencies['fake-agent']?.status).toBe('available');
+    runtime.dispose();
+  });
+
   it('suppresses publishes when a re-probe returns unchanged content', async () => {
     const { exec } = createFakeExec({ initiallyInstalled: true });
     const runtime = createRuntime(exec);

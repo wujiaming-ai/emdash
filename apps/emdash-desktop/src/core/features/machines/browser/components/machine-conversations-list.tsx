@@ -6,7 +6,7 @@ import {
   useQueryListSource,
   type CollectionViewColumn,
 } from '@emdash/ui/react/patterns';
-import { Button, DropdownMenu, Spinner, toast } from '@emdash/ui/react/primitives';
+import { Button, DropdownMenu, Select, Spinner, toast } from '@emdash/ui/react/primitives';
 import { useQueryClient } from '@tanstack/react-query';
 import { EllipsisIcon, Link2Icon, MessageSquareIcon, Trash2Icon, WifiOffIcon } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
@@ -30,6 +30,7 @@ import {
   useMachineConversations,
   type MachineConversationsScope,
 } from '../use-machine-conversations';
+import { NativeHistoryList } from './native-history-list';
 
 const CONVERSATION_COLUMNS: CollectionViewColumn<MachineConversationItem>[] = [
   {
@@ -76,6 +77,49 @@ const CONVERSATION_COLUMNS: CollectionViewColumn<MachineConversationItem>[] = [
  * is unreachable.
  */
 export function MachineConversationsList({
+  scope,
+  hostReachable,
+}: {
+  scope: MachineConversationsScope;
+  hostReachable: boolean;
+}) {
+  const [source, setSource] = useState('emdash');
+  return (
+    <div className="space-y-3">
+      <Select.Root
+        value={source}
+        onValueChange={(value) => {
+          if (value) setSource(value);
+        }}
+      >
+        <Select.Trigger aria-label="Conversation source" appearance="input">
+          {source === 'emdash'
+            ? 'Emdash conversations'
+            : source === 'codex'
+              ? 'Codex CLI history'
+              : 'Claude Code history'}
+        </Select.Trigger>
+        <Select.Content>
+          <Select.Item value="emdash">Emdash conversations</Select.Item>
+          <Select.Item value="codex">Codex CLI history</Select.Item>
+          <Select.Item value="claude">Claude Code history</Select.Item>
+        </Select.Content>
+      </Select.Root>
+      {source === 'emdash' ? (
+        <EmdashConversationsList scope={scope} hostReachable={hostReachable} />
+      ) : (
+        <NativeHistoryList
+          key={`${scope.kind === 'remote' ? scope.connectionId : 'local'}:${source}`}
+          scope={scope}
+          hostReachable={hostReachable}
+          providerId={source === 'codex' ? 'codex' : 'claude'}
+        />
+      )}
+    </div>
+  );
+}
+
+function EmdashConversationsList({
   scope,
   hostReachable,
 }: {

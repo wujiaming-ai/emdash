@@ -5,6 +5,7 @@ import {
 } from '@emdash/core/primitives/runtime-resolution/api';
 import {
   acpApiContract,
+  nativeHistoryProviderSchema,
   acpSessionStartModeSchema,
   acpSetOptionErrorSchema,
   sessionSummarySchema,
@@ -192,6 +193,22 @@ const conversationsTuiContract = defineContract({
 export const conversationsDomain = 'conversations' as const;
 
 export const conversationsContract = defineContract({
+  nativeHistory: defineContract({
+    list: procedure({
+      input: z.object({
+        host: serializedHostRefSchema,
+        providerId: nativeHistoryProviderSchema,
+        cursor: z.string().max(4096).nullable().optional(),
+      }),
+      output: acpApiContract.nativeHistory.list.output,
+      callTimeoutMs: 45_000,
+    }),
+    open: procedure({
+      input: z.object({ host: serializedHostRefSchema, selectionId: z.string().uuid() }),
+      output: z.object({ projectId: z.string(), taskId: z.string(), conversationId: z.string() }),
+      callTimeoutMs: 45_000,
+    }),
+  }),
   providerSettings: providerSettingsContract,
   attachments: defineContract({
     prepareLocalFiles: fallible({

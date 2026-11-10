@@ -5,6 +5,7 @@ import type {
 } from '@emdash/core/services/agent-plugins/api/plugins';
 import { z } from 'zod';
 import { connectStdioAcp } from '../../helpers/acp-stdio';
+import { enableCodexSteering } from './steering';
 
 /** 扩展只由 Codex 插件协商，其他 Agent 保留原有行为。 */
 export function connectCodexAcp(io: AcpProcessIo, toClient: AcpClientFactory): AcpAgentApi {
@@ -13,6 +14,9 @@ export function connectCodexAcp(io: AcpProcessIo, toClient: AcpClientFactory): A
   const agent: AcpAgentApi = connection;
   agent.initialize = async (params) => {
     const response = await initialize(params);
+    if (response._meta?.['emdash.dev/running-turn-input'] === 1) {
+      enableCodexSteering(agent, connection);
+    }
     if (response._meta?.['emdash.dev/side-question'] === 1) {
       agent.sideQuestion = async (request) =>
         z

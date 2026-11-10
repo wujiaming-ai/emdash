@@ -959,3 +959,40 @@ it('closes an in-flight side startup without waiting for the model handshake', a
   await starting;
   await expect(controller.call('acp.attach', opened)).rejects.toThrow('has closed');
 });
+
+describe('native CLI history routing', () => {
+  it('forwards one page to the selected host without a project requirement', async () => {
+    const page = { sessions: [], nextCursor: 'next' };
+    const list = vi.fn(async () => page);
+    const hosts: HostRef[] = [];
+    const controller = setupController({
+      client: { acp: { nativeHistory: { list } } },
+      resolvedHosts: hosts,
+    });
+    const host = hostRef('remote', 'history-host');
+    await expect(
+      controller.call('nativeHistory.list', {
+        host: formatHostRef(host),
+        providerId: 'codex',
+        cursor: 'cursor',
+      })
+    ).resolves.toEqual(page);
+    expect(hosts).toEqual([host]);
+    expect(list).toHaveBeenCalledExactlyOnceWith({
+      providerId: 'codex',
+      cursor: 'cursor',
+      env: undefined,
+    });
+  });
+
+  it('explains when an older server does not support CLI history', async () => {
+    const list = vi.fn().mockRejectedValue(new WireError('UNKNOWN_PROCEDURE', 'not implemented'));
+    const controller = setupController({ client: { acp: { nativeHistory: { list } } } });
+    await expect(
+      controller.call('nativeHistory.list', {
+        host: formatHostRef(LOCAL_HOST_REF),
+        providerId: 'claude',
+      })
+    ).rejects.toThrow('Update the workspace server');
+  });
+});

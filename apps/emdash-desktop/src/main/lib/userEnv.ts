@@ -65,9 +65,8 @@ export function getUserShellEnv(): Record<string, string> {
 }
 
 /**
- * Starts `$SHELL -ilc 'env'` with a 5 s timeout and returns immediately. On
- * any error (timeout, missing shell, restricted environment) the manager logs
- * a warning and retains a sanitized usable environment.
+ * 异步执行 `$SHELL -ilc 'env'`，限时 15 秒，不阻塞主进程。
+ * 超时、shell 不存在或环境受限时记录警告，保留已清理的环境；首次失败后可按需重试。
  *
  * Spawn-capable runtimes request the separately owned snapshot through the
  * parent controller; the manager makes their first request await this capture.

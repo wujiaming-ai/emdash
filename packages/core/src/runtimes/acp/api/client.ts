@@ -1,4 +1,5 @@
 export * from './contract';
+export * from './native-history';
 export * from './errors';
 export {
   promptPlacementSchema,

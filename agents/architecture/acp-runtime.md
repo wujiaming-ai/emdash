@@ -8,6 +8,12 @@ not mix cross-session routing with per-session state projection.
 
 - `AcpRuntime` is the composition root. It wires the ACP API contract to shared
   ports, the resource-cached connection source, and the session manager.
+- `NativeHistory` reads Codex and Claude Code history on the selected host through
+  `nativeHistory.list` (protocol 12.7). Each request uses a separate, short-lived
+  ACP connection and fetches at most 20 records; it does not start a conversation.
+  `nativeHistory.resolve` validates an expiring selection token and the original
+  directory before the desktop links the native session to a task. Continuation
+  uses the existing strict resume path with the original provider session ID.
 - `SessionManager` is the conversation directory and cross-conversation coordinator. It owns the
   handle map, suspended-intent index, process-close fan-out, lifecycle-chassis wiring, and the
   composition of the router, materializer, and list projector. Activity tracking, idle sweeping,
@@ -136,7 +142,7 @@ to the owning cell, which injects with SDK priority `next`. If hooks are disable
 the existing end-of-turn queue remains the fallback. The existing Send now action
 uses `sendQueuedPromptNow({ conversationId, id })` and SDK priority `now`, without
 `session/cancel`; pending permission/elicitation callbacks retain the adapter's
-`later` protection. Stop and other agents retain their previous behavior.
+`later` protection. Stop remains independent of running-turn input.
 
 A cell serializes and claims queued deliveries, preserves supplement message IDs
 inside the active transcript turn, and buffers updates until the steering receipt.
@@ -439,3 +445,11 @@ ACP resource-not-found errors must identify the requested session; provider-spec
 as Codex's missing-rollout response wrapped in
 `-32603`) is recognized by the plugin's `isSessionNotFound` hook. Generic internal errors and missing
 files are not evidence that conversation history is gone.
+
+Codex negotiates `emdash.dev/running-turn-input: 1` before enabling `steerPrompt`
+and `steerOnPrompt`. Normal supplements use the existing queue claim/receipt path
+and native `turn/steer`; explicit queue placement waits for the existing Send now
+control. The adapter honors `idleBehavior: promptRequired`, so an ended-turn race
+returns ownership to Emdash instead of starting a detached turn. A missing or
+uncertain receipt never triggers cancellation or automatic resubmission. Claude's
+tool-boundary pull and other providers' input paths remain unchanged.
