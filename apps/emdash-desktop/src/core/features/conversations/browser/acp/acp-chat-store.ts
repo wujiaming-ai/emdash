@@ -140,6 +140,7 @@ export class AcpChatStore {
   private _historyEpoch = 0;
   private _disposed = false;
   private _attachmentRecovery: Scope | null = null;
+  connectionRecovering = false;
   private _attachedHostGeneration: number | undefined;
   private _bootstrapFailed = false;
 
@@ -171,6 +172,8 @@ export class AcpChatStore {
       historyLoading: observable,
       historyKnown: observable,
       loadError: observable,
+      connectionRecovering: observable,
+      connectionNotice: computed,
       messageCount: observable,
       draftText: computed,
       draftAttachments: observable.shallow,
@@ -357,6 +360,18 @@ export class AcpChatStore {
 
   get liveActionsEnabled(): boolean {
     return this.hostAccess?.liveAction.kind !== 'disabled' && (this.session?.usable ?? false);
+  }
+
+  /** 连接断开时只展示真实连接状态，不用旧快照推断任务是否完成。 */
+  get connectionNotice(): string | null {
+    if (!this.session) return null;
+    const host = this.hostAccess?.state;
+    if (host?.kind === 'degraded') {
+      return host.situation === 'offline' || host.recovery !== 'automatic'
+        ? 'Connection unavailable · task status unknown'
+        : 'Reconnecting… · task status unknown';
+    }
+    return this.connectionRecovering ? 'Restoring session… · task status unknown' : null;
   }
 
   get isEmpty(): boolean {
@@ -795,6 +810,9 @@ export class AcpChatStore {
     void this._attachmentRecovery?.dispose();
     const scope = this._scope.child('attachment-recovery');
     this._attachmentRecovery = scope;
+    runInAction(() => {
+      this.connectionRecovering = true;
+    });
     void scope
       .run('reattach', async () => {
         let attempt = 0;
@@ -834,7 +852,12 @@ export class AcpChatStore {
         }
       })
       .exit.finally(() => {
-        if (this._attachmentRecovery === scope) this._attachmentRecovery = null;
+        if (this._attachmentRecovery === scope) {
+          this._attachmentRecovery = null;
+          runInAction(() => {
+            this.connectionRecovering = false;
+          });
+        }
         void scope.dispose();
       });
   }

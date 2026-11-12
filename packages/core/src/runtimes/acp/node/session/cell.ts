@@ -77,6 +77,7 @@ export class SessionCell {
   private readonly effectDriver: MachineEffectDriver<Effect>;
   private preparedPromptEffects: Effect[] | null = null;
   private disposed = false;
+  private publishingTerminal = false;
 
   constructor(private readonly deps: SessionCellDeps) {
     this._acpSessionId = deps.acpSessionId;
@@ -92,7 +93,7 @@ export class SessionCell {
       interpret: (effect) => this.interpretEffect(effect),
       onDrain: ({ effects }) => {
         if (effects.some(isSessionStateEffect)) {
-          this.deps.callbacks?.onSessionStateChanged?.();
+          this.emitSessionStateChanged();
         }
       },
       onInterpreterError: ({ error, effect }) => {
@@ -241,7 +242,7 @@ export class SessionCell {
     if (event.kind === 'ignored') return;
     if (event.kind === 'mcp_startup_failure') {
       this.mcpStartupFailures.set(event.server, event.error);
-      this.deps.callbacks?.onSessionStateChanged?.();
+      this.emitSessionStateChanged();
       return;
     }
 
@@ -257,7 +258,16 @@ export class SessionCell {
     }
 
     const previousRunningAgentCount = this.lastRunningAgentCount;
+    const previousTurn = this.transcript.activeTurn;
+    const previousHistory = this.transcript.history;
     this.transcript.pushEvent(event);
+    if (
+      event.kind === 'notification' &&
+      event.activity &&
+      previousTurn === this.transcript.activeTurn &&
+      previousHistory === this.transcript.history
+    )
+      return;
     if (event.kind === 'config') this.configCatalogState = 'ready';
     this.dispatchAgentsChangedIfNeeded(previousRunningAgentCount);
     if (idleTranscriptEvent) this.scheduleQuiesce();
@@ -554,10 +564,17 @@ export class SessionCell {
 
   settleTurn(outcome: TranscriptTurnOutcome): void {
     const previousRunningAgentCount = this.lastRunningAgentCount;
-    this.transcript.settleTurn(outcome);
-    this.dispatchAgentsChangedIfNeeded(previousRunningAgentCount);
-    this.emitTranscriptChanged();
-    this.applyEvent({ type: 'TurnEnded', outcome: machineOutcome(outcome) });
+    // 先完成记录与状态的同一事务，避免 Wire 发布已结束但仍运行的中间快照。
+    this.publishingTerminal = true;
+    try {
+      this.transcript.settleTurn(outcome);
+      this.dispatchAgentsChangedIfNeeded(previousRunningAgentCount);
+      this.applyEvent({ type: 'TurnEnded', outcome: machineOutcome(outcome) });
+    } finally {
+      this.publishingTerminal = false;
+      this.emitTranscriptChanged();
+      this.emitSessionStateChanged();
+    }
   }
 
   processClosed(exitCode: number | null): void {
@@ -691,6 +708,21 @@ export class SessionCell {
           }
         : {}),
     });
+    if (this.deps.agent.supportsActivities) {
+      this.transcript.pushEvent({
+        kind: 'notification',
+        title: 'Working…',
+        text: '',
+        activity: {
+          id: 'turn',
+          category: 'turn',
+          status: 'running',
+          severity: 'info',
+          turnId: this.transcript.activeTurn?.id,
+          startedAt: Date.now(),
+        },
+      });
+    }
     this.emitTranscriptChanged();
 
     let outcome: TranscriptTurnOutcome;
@@ -705,6 +737,9 @@ export class SessionCell {
         ));
       const promptRequest = {
         sessionId: this.acpSessionId,
+        ...(this.deps.agent.supportsActivities
+          ? { _meta: { 'emdash.dev/turn-id': this.transcript.activeTurn?.id } }
+          : {}),
         prompt: [
           ...resolvedAttachments.map((attachment) => ({
             type: 'image' as const,
@@ -883,7 +918,11 @@ export class SessionCell {
   }
 
   private emitTranscriptChanged(): void {
-    this.deps.callbacks?.onTranscriptChanged?.();
+    if (!this.publishingTerminal) this.deps.callbacks?.onTranscriptChanged?.();
+  }
+
+  private emitSessionStateChanged(): void {
+    if (!this.publishingTerminal) this.deps.callbacks?.onSessionStateChanged?.();
   }
 }
 

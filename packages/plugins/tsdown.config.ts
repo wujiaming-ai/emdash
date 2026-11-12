@@ -40,8 +40,13 @@ const adapterConfigs: UserConfig[] = adapterAssets.map((asset) => ({
     asset.name === 'codex-acp'
       ? {
           '@emdash/codex-side-question': resolve('src/agents/impl/codex/side-question-server.ts'),
+          '@emdash/agent-events': resolve('src/agents/helpers/activity-events.ts'),
         }
-      : undefined,
+      : asset.name === 'claude-acp'
+        ? { '@emdash/agent-events': resolve('src/agents/helpers/activity-events.ts') }
+        : undefined,
+  // 适配器资源按单文件复制，异步能力模块必须内联，避免漏带运行时分块。
+  outputOptions: { codeSplitting: false },
   format: [asset.format],
   dts: false,
   sourcemap: true,

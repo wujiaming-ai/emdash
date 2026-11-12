@@ -134,6 +134,7 @@ it.each([
     store.bootstrap();
     await vi.waitFor(() => expect(store.historyLoading).toBe(false));
     expect(store.loadError).toBeNull();
+    expect(store.connectionNotice).toBeNull();
     const live = store.session!;
     const revalidate = vi.spyOn(live, 'revalidate');
     const seed = vi.spyOn(store.chatState.transcript.history, 'replace');
@@ -168,6 +169,7 @@ it.each([
     runInAction(() =>
       hostState.set({ kind: 'degraded', situation: 'recovering', recovery: 'automatic' })
     );
+    expect(store.connectionNotice).toBe('Reconnecting… · task status unknown');
     publish(completed);
     state.set({
       ...peek(state),

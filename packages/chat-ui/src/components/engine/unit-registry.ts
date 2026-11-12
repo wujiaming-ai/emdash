@@ -16,6 +16,7 @@
  */
 
 import { messageFromItem, messageUnitDef } from '@components/rows/message/message.def';
+import { activityGroupUnitDef, activityUnitDef } from '@components/rows/notification/activity.def';
 import { notificationUnitDef } from '@components/rows/notification/notification.def';
 import { planFromItem, planUnitDef } from '@components/rows/plan/plan.def';
 import { resourceLinkUnitDef } from '@components/rows/resource-link/resource-link.def';
@@ -182,7 +183,21 @@ function toolNodeSegment(kind: ToolNode['kind']): ItemSegmenter {
  */
 export const SEGMENTERS: Record<string, ItemSegmenter> = {
   message: messageSegmenter,
-  notification: nativePassthrough<ChatItem>('notification', (item) => item, COMPOSITE_CHROME),
+  'activity-group': nativePassthrough<SyntheticItem>(
+    'activity-group',
+    (item) => item,
+    COMPOSITE_CHROME
+  ),
+  notification: {
+    kind: 'notification',
+    chrome: COMPOSITE_CHROME,
+    segment: (item) => {
+      const notification = item as Extract<ChatItem, { kind: 'notification' }>;
+      return [
+        unit(notification.activity ? 'activity' : 'notification', item, item, { key: 'self' }),
+      ];
+    },
+  },
   thinking: nativePassthrough<ChatItem>('thinking', (item) => item, COMPOSITE_CHROME),
   'thinking-group': nativePassthrough<ThinkingGroupItem>(
     'thinking-group',
@@ -228,6 +243,8 @@ export const UNIT_REGISTRY: Record<string, RegistryUnitDef> = {
   // Message unit (single unit per message, renders block stack internally)
   message: messageUnitDef as unknown as RegistryUnitDef,
   notification: notificationUnitDef as unknown as RegistryUnitDef,
+  activity: activityUnitDef as unknown as RegistryUnitDef,
+  'activity-group': activityGroupUnitDef as unknown as RegistryUnitDef,
   // Composite item units (single-unit per ChatItem kind)
   diff: diffUnitDef as unknown as RegistryUnitDef,
   plan: planUnitDef as unknown as RegistryUnitDef,

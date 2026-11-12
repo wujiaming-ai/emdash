@@ -1,5 +1,6 @@
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import type { NormalizedEvent } from '@emdash/core/runtimes/acp/api';
+import { decodeActivity } from '../../helpers/activity-events';
 
 /**
  * Claude-specific enrichment of a baseline `NormalizedEvent`.
@@ -15,6 +16,8 @@ import type { NormalizedEvent } from '@emdash/core/runtimes/acp/api';
  * Unrecognized content remains a message for the renderer's literal fallback.
  */
 export function enrichClaudeUpdate(update: NormalizedEvent, raw: SessionUpdate): NormalizedEvent {
+  const activity = decodeActivity(raw);
+  if (activity) return activity;
   if (update.kind === 'usage') {
     const source = raw._meta?.['emdash.dev/context-window'];
     if (source === 'resolved' || source === 'estimated' || source === 'unknown') {

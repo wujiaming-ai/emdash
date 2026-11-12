@@ -630,3 +630,91 @@ describe('SessionCell idle turns and queue commands', () => {
     expect(cell.sessionState.queuedPrompts.map((prompt) => prompt.id)).toEqual([second.id]);
   });
 });
+
+it.each(['claude', 'codex'])(
+  'publishes a coherent terminal snapshot for %s',
+  async (providerId) => {
+    const gate = deferred<{ stopReason: 'end_turn' }>();
+    const agent = new FakeAcpAgent();
+    agent.prompt = vi.fn(() => gate.promise);
+    const snapshots: Array<{ active: boolean; generating: boolean }> = [];
+    const { cell } = makePendingCell(agent, {
+      providerId,
+      callbacks: {
+        onTranscriptChanged: () =>
+          snapshots.push({
+            active: cell.history().active !== null,
+            generating: cell.sessionState.isGenerating,
+          }),
+        onSessionStateChanged: () =>
+          snapshots.push({
+            active: cell.history().active !== null,
+            generating: cell.sessionState.isGenerating,
+          }),
+      },
+    });
+    try {
+      cell.applySessionReady();
+      const pending = cell.prompt({ text: 'Work' });
+      await vi.waitFor(() => expect(agent.prompt).toHaveBeenCalledOnce());
+      snapshots.length = 0;
+      gate.resolve({ stopReason: 'end_turn' });
+      await pending;
+      expect(snapshots.length).toBeGreaterThan(0);
+      expect(snapshots).not.toContainEqual({ active: false, generating: true });
+    } finally {
+      cell.dispose();
+    }
+  }
+);
+
+it.each([true, false])(
+  'only adds turn summaries for negotiated adapters (%s)',
+  async (supported) => {
+    const gate = deferred<{ stopReason: 'end_turn' }>();
+    const agent = Object.assign(new FakeAcpAgent(), { supportsActivities: supported });
+    agent.prompt = vi.fn(() => gate.promise);
+    const onTranscriptChanged = vi.fn();
+    const { cell } = makePendingCell(agent, { callbacks: { onTranscriptChanged } });
+    cell.applySessionReady();
+    try {
+      const pending = cell.prompt({ text: 'Work' });
+      await vi.waitFor(() => expect(agent.prompt).toHaveBeenCalledOnce());
+      const id = cell.history().active!.id;
+      const notices = cell.history().active!.items.filter((item) => item.kind === 'notification');
+      expect(notices).toHaveLength(supported ? 1 : 0);
+      expect(agent.prompt.mock.calls[0][0]._meta).toEqual(
+        supported ? { 'emdash.dev/turn-id': id } : undefined
+      );
+      if (supported) {
+        const progress = {
+          kind: 'notification',
+          title: 'Waiting for background agents…',
+          text: '',
+          activity: {
+            id: 'turn',
+            category: 'turn',
+            status: 'running',
+            severity: 'info',
+            turnId: id,
+          },
+        } as const;
+        cell.push(progress);
+        onTranscriptChanged.mockClear();
+        cell.push(progress);
+        expect(onTranscriptChanged).not.toHaveBeenCalled();
+        expect(cell.sessionState.isGenerating).toBe(true);
+      }
+      gate.resolve({ stopReason: 'end_turn' });
+      await pending;
+      expect(cell.sessionState.isGenerating).toBe(false);
+      if (supported)
+        expect(cell.history().committed[0].items.at(-1)).toMatchObject({
+          title: 'Completed · 0s',
+          activity: { status: 'completed' },
+        });
+    } finally {
+      cell.dispose();
+    }
+  }
+);

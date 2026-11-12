@@ -563,6 +563,11 @@ export const ComposerForStore = observer(function ComposerForStore({
   return createPortal(
     <>
       <input ref={fileInputRef} type="file" multiple hidden onChange={handleFileInputChange} />
+      {(providerId === 'claude' || providerId === 'codex') && store.connectionNotice && (
+        <div role="status" className="px-3 py-1 text-xs text-foreground-muted">
+          {store.connectionNotice}
+        </div>
+      )}
       {!disabledReason && store.loadError && (
         <div className="border-destructive/30 bg-destructive/5 mx-3 mb-1 flex items-center justify-between gap-2 rounded-md border px-2 py-1 text-xs">
           <span className="truncate text-foreground-muted">{store.loadError.message}</span>

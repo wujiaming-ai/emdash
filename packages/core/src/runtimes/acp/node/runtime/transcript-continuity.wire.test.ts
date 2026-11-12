@@ -11,8 +11,9 @@ import { makeAcpHarness, makeStartInput } from '#runtimes/acp/node/acp-test-supp
 import { createAcpController } from '#runtimes/acp/node/api/controller';
 import { AcpRuntime } from './runtime';
 
-async function createHarness() {
+async function createHarness(activities = false) {
   const provider = makeAcpHarness();
+  Object.assign(provider.agent, { supportsActivities: activities });
   const runtime = new AcpRuntime(provider.deps);
   const wire = createTestWire(acpApiContract, createAcpController(runtime));
   const models = remote(acpApiContract.session, wire.client.session);
@@ -81,6 +82,34 @@ const messageTexts = (turn: TranscriptTurn) =>
   turn.items.flatMap((item) => (item.kind === 'message' ? [item.text] : []));
 
 describe('completed history through real runtime and Wire', () => {
+  it('publishes completion and durable activity through real Wire within the controlled latency budget', async () => {
+    h = await createHarness(true);
+    const done = h.gate();
+    await h.send('Work');
+    await vi.waitFor(() => expect(h.active).not.toBeNull());
+    expect(h.active!.items.at(-1)).toMatchObject({
+      activity: { status: 'running', category: 'turn' },
+    });
+    for (let i = 0; i < 100; i++) {
+      await h.update({
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: '.' },
+      });
+    }
+    const started = performance.now();
+    done.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(
+      () => expect(snapshot(h.session.states.state).value?.isGenerating).toBe(false),
+      { timeout: 500, interval: 10 }
+    );
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(snapshot(h.session.states.state).value?.transcript?.activeTurn).toBeNull();
+    const page = await h.history();
+    expect(page.turns[0].items.find((item) => item.kind === 'notification')).toMatchObject({
+      activity: { status: 'completed', category: 'turn' },
+    });
+  });
+
   it('publishes a coherent transcript position across streaming, queue handoff and reconnect', async () => {
     h = await createHarness();
     await h.session.states.state.refresh();

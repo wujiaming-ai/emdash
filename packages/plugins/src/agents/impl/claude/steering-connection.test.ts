@@ -32,7 +32,7 @@ it('advertises the reverse boundary handler and requests host-owned fallback', a
     protocolVersion: 1,
     clientCapabilities: {
       fs: { readTextFile: true },
-      _meta: { 'emdash.dev/queued-steering': true },
+      _meta: { 'emdash.dev/queued-steering': true, 'emdash.dev/activities': 1 },
     },
   });
   mocks.extMethod.mockResolvedValue({ outcome: 'injected' });
@@ -49,3 +49,16 @@ it('advertises the reverse boundary handler and requests host-owned fallback', a
     'Unexpected Claude steering response'
   );
 });
+
+it.each([undefined, 1])(
+  'negotiates native activities independently of steering (%s)',
+  async (capability) => {
+    mocks.initialize.mockResolvedValue({
+      protocolVersion: 1,
+      _meta: { 'emdash.dev/activities': capability },
+    });
+    const agent = connectClaudeAcp({} as AcpProcessIo, () => ({}) as never);
+    await agent.initialize({ protocolVersion: 1 });
+    expect(agent.supportsActivities).toBe(capability === 1);
+  }
+);

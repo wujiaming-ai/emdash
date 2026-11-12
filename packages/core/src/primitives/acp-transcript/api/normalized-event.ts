@@ -42,6 +42,15 @@ export type NormalizedEvent =
       kind: 'notification';
       title: string;
       text: string;
+      activity?: {
+        id: string;
+        category: 'turn' | 'tool' | 'task' | 'hook' | 'retry' | 'rate_limit' | 'notice';
+        status: 'running' | 'completed' | 'failed' | 'cancelled';
+        severity: 'info' | 'warning' | 'error';
+        turnId?: string;
+        background?: boolean;
+        startedAt?: number;
+      };
     }
   | {
       kind: 'message';

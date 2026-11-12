@@ -326,7 +326,13 @@ export type TurnOutcomeItem = {
   outcome: TranscriptTurnOutcome;
 };
 
-export type SyntheticItem = ThinkingGroupItem | WorkingItem | TurnOutcomeItem;
+export type ActivityGroupItem = {
+  kind: 'activity-group';
+  id: string;
+  events: readonly Extract<TranscriptItem, { kind: 'notification' }>[];
+};
+
+export type SyntheticItem = ThinkingGroupItem | WorkingItem | TurnOutcomeItem | ActivityGroupItem;
 
 export type ChatItem =
   | TranscriptItem

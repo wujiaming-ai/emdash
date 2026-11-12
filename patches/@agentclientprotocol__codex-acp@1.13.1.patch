@@ -1,13 +1,14 @@
 diff --git a/dist/index.js b/dist/index.js
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -1,4 +1,5 @@
+@@ -1,4 +1,6 @@
  #!/usr/bin/env node
++import { ActivityReporter, turnActivity } from "@emdash/agent-events";
 +import { CodexSideQuestions, emdashSideQuestionParams, temporaryForkOptions } from "@emdash/codex-side-question";
  import { createRequire as __createRequire } from 'module'; const require = __createRequire(import.meta.url);
  var __create = Object.create;
  var __defProp = Object.defineProperty;
-@@ -33358,7 +33359,9 @@
+@@ -33358,7 +33360,9 @@
  import { createHash } from "node:crypto";
  async function forkSession(request, additionalDirectories, dependencies) {
    await dependencies.refreshSkills(request.cwd, additionalDirectories);
@@ -18,7 +19,7 @@ diff --git a/dist/index.js b/dist/index.js
    const response = await dependencies.codexClient.threadFork({
      excludeTurns: true,
      config: await dependencies.createSessionConfig(
-@@ -33369,9 +33372,15 @@
+@@ -33369,9 +33373,15 @@
      cwd: request.cwd,
      ...lastTurnId !== void 0 && { lastTurnId },
      modelProvider: await dependencies.getResumeModelProvider(),
@@ -36,7 +37,7 @@ diff --git a/dist/index.js b/dist/index.js
    const models = await dependencies.fetchAvailableModels();
    return {
      sessionId: response.thread.id,
-@@ -34205,6 +34214,7 @@
+@@ -34205,6 +34215,7 @@
      return await this.codexClient.awaitMcpServerOauthLoginCompleted(name, threadId);
    }
    async listSessions(request) {
@@ -44,7 +45,7 @@ diff --git a/dist/index.js b/dist/index.js
      const sourceKinds = [
        "cli",
        "vscode",
-@@ -34220,10 +34230,11 @@
+@@ -34220,10 +34231,11 @@
        }
        return arePathBasenamesEqual(thread.cwd, requestedCwd);
      };
@@ -57,17 +58,18 @@ diff --git a/dist/index.js b/dist/index.js
        modelProviders,
        sourceKinds
      });
-@@ -37754,6 +37765,9 @@
+@@ -37754,6 +37766,10 @@
        },
        authMethods: getCodexAuthMethods(_params.clientCapabilities),
        _meta: {
++        "emdash.dev/activities": 1,
 +        "emdash.dev/side-question": 1,
 +        "emdash.dev/running-turn-input": 1,
 +        "emdash.dev/side-session": 1,
          steering: {
            supported: true
          },
-@@ -37776,6 +37790,14 @@
+@@ -37776,6 +37792,14 @@
          }
        }
      };
@@ -82,7 +84,7 @@ diff --git a/dist/index.js b/dist/index.js
    }
    async extMethod(method, params) {
      const methodRequest = { method, params };
-@@ -38059,7 +38081,7 @@
+@@ -38059,7 +38083,7 @@
      );
      this.installSessionState(sessionState);
      resumeSubscribed = false;
@@ -91,7 +93,7 @@ diff --git a/dist/index.js b/dist/index.js
      if (canPublishSessionUpdates && requestedMcpServers.length > 0 && mcpServerStartupVersion !== null) {
        this.pendingMcpStartupSessions.set(sessionId, {
          requestedServers: new Set(getRequestedMcpServerNames(requestedMcpServers)),
-@@ -38199,6 +38221,7 @@
+@@ -38199,6 +38223,7 @@
      };
    }
    async closeSession(params) {
@@ -99,7 +101,7 @@ diff --git a/dist/index.js b/dist/index.js
      logger.log("Closing session...", { sessionId: params.sessionId });
      const closeGeneration = this.bumpSessionGeneration(params.sessionId);
      const sessionState = this.sessions.get(params.sessionId);
-@@ -38790,6 +38813,10 @@
+@@ -38790,6 +38815,10 @@
          return { outcome: "injected" };
        }
      }
@@ -110,7 +112,7 @@ diff --git a/dist/index.js b/dist/index.js
      return await this.startNewTurnFromSteering(params);
    }
    /**
-@@ -38928,7 +38955,8 @@
+@@ -38928,7 +38957,8 @@
      }
      return {
        sessionId,
@@ -120,7 +122,41 @@ diff --git a/dist/index.js b/dist/index.js
      };
    }
    createSessionConfigOptions(sessionState) {
-@@ -40620,5 +40648,5 @@
+@@ -39846,7 +39876,17 @@
+         this.clientCapabilities,
+         activePrompt.signal
+       );
++      const emdashActivities = sessionState.emdashActivities ??= new ActivityReporter();
++      const emdashTurnId = params._meta?.["emdash.dev/turn-id"];
++      const emitActivity = async (update) => {
++        if (update && this.clientCapabilities?._meta?.["emdash.dev/activities"] === 1) {
++          await new ACPSessionConnection(this.connection, params.sessionId).update(update);
++        }
++      };
+       const observeInteraction = async (event) => {
++        if (this.clientCapabilities?._meta?.["emdash.dev/activities"] === 1 && (!event.params.threadId || event.params.threadId === params.sessionId)) {
++          for (const update of emdashActivities.codex(event, emdashTurnId)) await emitActivity(update);
++        }
+         permissionContext.handleNotification(event);
+         await elicitationHandler.handleNotification(event);
+       };
+@@ -40012,6 +40052,7 @@
+       }
+       await this.codexAcpClient.waitForSessionNotifications(params.sessionId);
+       if (turnCompleted.turn.status === "completed") {
++        if (sessionState.subagents.hasOutstanding()) await emitActivity(turnActivity(emdashTurnId, "Waiting for background agents…"));
+         await eventHandler.waitForNativeSubagents(activePrompt.signal);
+         if (activePrompt.signal.aborted) return cancelledPromptResponse();
+         await this.codexAcpClient.waitForSessionNotifications(params.sessionId);
+@@ -40101,6 +40142,7 @@
+           }
+           await this.codexAcpClient.waitForSessionNotifications(params.sessionId);
+           if (turnCompleted.turn.status === "completed") {
++            if (sessionState.subagents.hasOutstanding()) await emitActivity(turnActivity(emdashTurnId, "Waiting for background agents…"));
+             await eventHandler.waitForNativeSubagents(activePrompt.signal);
+             if (activePrompt.signal.aborted) return cancelledPromptResponse();
+             await this.codexAcpClient.waitForSessionNotifications(params.sessionId);
+@@ -40620,5 +40662,5 @@
          codexAcpServer = null;
        }
      });

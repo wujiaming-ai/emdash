@@ -1,7 +1,10 @@
 import type { EnrichHook } from '@emdash/core/runtimes/acp/api';
+import { decodeActivity } from '../../helpers/activity-events';
 
 /** codex-acp represents startup diagnostics as synthetic failed tool calls. */
 export const enrichCodexUpdate: EnrichHook = (event, raw) => {
+  const activity = decodeActivity(raw);
+  if (activity) return activity;
   if (
     event.kind !== 'tool_call' ||
     event.status !== 'failed' ||

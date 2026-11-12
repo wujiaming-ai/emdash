@@ -13,7 +13,14 @@ export function connectCodexAcp(io: AcpProcessIo, toClient: AcpClientFactory): A
   const initialize = connection.initialize.bind(connection);
   const agent: AcpAgentApi = connection;
   agent.initialize = async (params) => {
-    const response = await initialize(params);
+    const response = await initialize({
+      ...params,
+      clientCapabilities: {
+        ...params.clientCapabilities,
+        _meta: { ...params.clientCapabilities?._meta, 'emdash.dev/activities': 1 },
+      },
+    });
+    agent.supportsActivities = response._meta?.['emdash.dev/activities'] === 1;
     if (response._meta?.['emdash.dev/running-turn-input'] === 1) {
       enableCodexSteering(agent, connection);
     }

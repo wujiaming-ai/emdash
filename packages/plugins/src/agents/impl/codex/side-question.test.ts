@@ -18,7 +18,10 @@ it.each([undefined, 1])(
               protocolVersion: 1,
               agentCapabilities: {},
               authMethods: [],
-              _meta: { 'emdash.dev/side-question': capability },
+              _meta: {
+                'emdash.dev/side-question': capability,
+                'emdash.dev/activities': capability,
+              },
             }
           : { text: 'side answer' };
       stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
@@ -29,6 +32,7 @@ it.each([undefined, 1])(
     }));
     try {
       await agent.initialize({ protocolVersion: 1, clientCapabilities: {} });
+      expect(agent.supportsActivities).toBe(capability === 1);
       if (capability === 1) {
         expect(
           await agent.sideQuestion?.({

@@ -21,6 +21,7 @@ import type {
   TranscriptItem,
   TranscriptMessage,
   TranscriptThinking,
+  TranscriptTurnOutcome,
   ToolCallItem,
   ToolGroup,
   ToolNode,
@@ -593,8 +594,24 @@ export function foldItem(
   const flatItems = flattenItems(items);
   switch (event.kind) {
     case 'notification': {
+      const id = event.activity
+        ? `${turnId}:activity:${JSON.stringify(event.activity.id)}`
+        : undefined;
+      const existing = items.find((item) => item.kind === 'notification' && item.id === id);
+      if (existing?.kind === 'notification') {
+        // 晚到的心跳不能把已完成实体重新标成运行中。
+        if (existing.activity?.status !== 'running' && event.activity?.status === 'running')
+          return items;
+        const updated = {
+          ...existing,
+          ...event,
+          activity: { ...existing.activity!, ...event.activity! },
+        };
+        if (JSON.stringify(updated) === JSON.stringify(existing)) return items;
+        return items.map((item) => (item === existing ? updated : item));
+      }
       const seq = nextSeq(flatItems);
-      return [...items, { ...event, id: `${turnId}:notification:${seq}`, seq }];
+      return [...items, { ...event, id: id ?? `${turnId}:notification:${seq}`, seq }];
     }
     case 'message': {
       const id = event.itemId;
@@ -778,7 +795,11 @@ export function foldItem(
  *
  * Input must be plain objects (not Solid/MobX proxies).
  */
-export function finalizeItems(items: TranscriptItem[], at: number): TranscriptItem[] {
+export function finalizeItems(
+  items: TranscriptItem[],
+  at: number,
+  outcome?: TranscriptTurnOutcome
+): TranscriptItem[] {
   const finalizeNode = (item: ToolNode, backgroundAncestor = false): ToolNode => {
     const background = backgroundAncestor || ('background' in item && item.background === true);
     if (isToolGroup(item)) {
@@ -797,7 +818,30 @@ export function finalizeItems(items: TranscriptItem[], at: number): TranscriptIt
 
   return items.map((item): TranscriptItem => {
     switch (item.kind) {
-      case 'notification':
+      case 'notification': {
+        const activity = item.activity;
+        if (!outcome || !activity || activity.status !== 'running' || activity.background)
+          return item;
+        // 完成响应只证明本轮 / 重试结束；Hook、工具和任务需等原生终态。
+        if (activity.category !== 'turn' && activity.category !== 'retry') return item;
+        const status =
+          outcome.kind === 'done' ? 'completed' : outcome.kind === 'error' ? 'failed' : 'cancelled';
+        const elapsed =
+          activity.startedAt === undefined
+            ? ''
+            : ` · ${Math.max(0, Math.floor((at - activity.startedAt) / 1000))}s`;
+        const title =
+          activity.category === 'turn'
+            ? `${status === 'completed' ? 'Completed' : status === 'failed' ? 'Failed' : 'Cancelled'}${elapsed}`
+            : activity.category === 'retry' && status === 'completed'
+              ? 'Retry recovered'
+              : item.title;
+        return {
+          ...item,
+          title,
+          activity: { ...activity, status, severity: status === 'failed' ? 'error' : 'info' },
+        };
+      }
       case 'message':
         return item;
       case 'thinking':

@@ -17,10 +17,22 @@ export const transcriptMessageSchema = z.object({
 export type TranscriptMessage = z.infer<typeof transcriptMessageSchema>;
 
 /** Durable provider notices do not carry a conversational role or tool status. */
+export const activitySchema = z.object({
+  id: z.string(),
+  category: z.enum(['turn', 'tool', 'task', 'hook', 'retry', 'rate_limit', 'notice']),
+  status: z.enum(['running', 'completed', 'failed', 'cancelled']),
+  severity: z.enum(['info', 'warning', 'error']),
+  turnId: z.string().optional(),
+  background: z.boolean().optional(),
+  startedAt: z.number().optional(),
+});
+
 export const transcriptNotificationSchema = z.object({
   kind: z.literal('notification'),
   id: z.string(),
   seq: z.number().int(),
   title: z.string(),
   text: z.string(),
+  /** 原生事件只更新所属实体，旧通知保持原有展示。 */
+  activity: activitySchema.optional(),
 });

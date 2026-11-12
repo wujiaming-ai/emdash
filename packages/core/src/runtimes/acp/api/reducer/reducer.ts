@@ -128,7 +128,7 @@ export function closeActive(
   if (!t.active) return t;
   const committed: TranscriptTurn = {
     ...t.active,
-    items: finalizeItems(t.active.items, at),
+    items: finalizeItems(t.active.items, at, outcome),
     ...(outcome !== undefined ? { outcome } : {}),
   };
   return { committed: [...t.committed, committed], active: null };
@@ -360,6 +360,26 @@ function reduceInput(s: ParserState, input: ReducerInput, deps: ReducerDeps): Pa
   switch (event.kind) {
     case 'notification': {
       const { active, committed } = s.transcript;
+      const requestedTurn = event.activity?.turnId;
+      if (event.activity && !requestedTurn) return s;
+      const historicalIndex = requestedTurn
+        ? committed.findIndex((turn) => turn.id === requestedTurn)
+        : -1;
+      if (requestedTurn && active?.id !== requestedTurn) {
+        if (historicalIndex < 0) return s;
+        const owner = committed[historicalIndex];
+        const items = foldItem(owner.items, event, owner.id, input.at);
+        if (items === owner.items) return s;
+        return {
+          ...s,
+          transcript: {
+            active,
+            committed: committed.map((turn, index) =>
+              index === historicalIndex ? { ...turn, items } : turn
+            ),
+          },
+        };
+      }
       const owner = active ??
         committed.at(-1) ?? {
           id: makeTurnId(deps.conversationId, 0),
@@ -367,7 +387,9 @@ function reduceInput(s: ParserState, input: ReducerInput, deps: ReducerDeps): Pa
           initiator: 'agent' as const,
           items: [],
         };
-      const turn = { ...owner, items: foldItem(owner.items, event, owner.id, input.at) };
+      const items = foldItem(owner.items, event, owner.id, input.at);
+      if (items === owner.items) return s;
+      const turn = { ...owner, items };
       const transcript = active
         ? { committed, active: turn }
         : { committed: [...committed.slice(0, -1), turn], active: null };

@@ -25,290 +25,6 @@ index 593b6d5992de6fedb8e8daee7f98dd7bbcf5b4b6..aa67eaca326663fe1176b621cfaa2cdc
  }
  export declare class ClaudeAcpAgent {
      sessions: {
-diff --git a/dist/acp-agent.js b/dist/acp-agent.js
-index beba2ff4f21e6805099c55215345a95a046c608a..d7d67b7a5697c954c090be8d35cb3393000d7d33 100644
---- a/dist/acp-agent.js
-+++ b/dist/acp-agent.js
-@@ -1,3 +1,4 @@
-+import { ContextWindowTracker } from "./context-window.js";
- import { agent as acpAgent, CreateElicitationResponse, methods, ndJsonStream, RequestError, } from "@agentclientprotocol/sdk";
- import { deleteSession, getSessionMessages, listSessions, query, } from "@anthropic-ai/claude-agent-sdk";
- import { GOAL_ACTIONS, GOAL_CONTROL_METHOD, GOAL_EXTENSION_VERSION, goalUpdateFromPrompt, parseGoalRequest, toGoalSnapshot, } from "./goal-extension.js";
-@@ -200,6 +201,10 @@ function parseSteerRequest(params) {
-         throw RequestError.invalidParams(undefined, "steer params require a non-empty prompt array");
-     }
-     const steering = _meta && typeof _meta === "object" ? _meta.steering : undefined;
-+    const priority = steering && typeof steering === "object" ? steering.priority : undefined;
-+    if (priority !== undefined && priority !== "now" && priority !== "next") {
-+        throw RequestError.invalidParams(undefined, "unsupported steering priority");
-+    }
-     const idleBehavior = steering && typeof steering === "object"
-         ? steering.idleBehavior
-         : undefined;
-@@ -757,6 +762,9 @@ class ClientConnection {
-     extNotification(method, params) {
-         return this.ctx.notify(method, params);
-     }
-+    extMethod(method, params) {
-+        return this.ctx.request(method, params);
-+    }
- }
- function raceWithAbort(operation, signal) {
-     return new Promise((resolve, reject) => {
-@@ -1139,6 +1147,7 @@ export class ClaudeAcpAgent {
-                 ...airSessionFailureCapabilityMeta(AGENT_FILE_CHANGE_REPORT_CAPABILITY, AIR_NATIVE_SUBAGENT_SESSIONS_CAPABILITY, AIR_ASYNC_TASKS_CAPABILITY, AIR_RECOMMENDED_CONFIG_VALUE_CAPABILITY),
-                 steering: {
-                     supported: true,
-+                    priorities: ["now", "next"],
-                 },
-                 goal: {
-                     version: GOAL_EXTENSION_VERSION,
-@@ -1199,9 +1208,18 @@ export class ClaudeAcpAgent {
-         return result;
-     }
-     async listSessions(params) {
--        const sdk_sessions = await listSessions({ dir: params.cwd ?? undefined });
-+        const pageSize = params._meta?.["emdash.dev/history-page-size"];
-+        const paged = pageSize === 20;
-+        const offset = paged && params.cursor ? Number(params.cursor) : 0;
-+        if (paged && (!Number.isSafeInteger(offset) || offset < 0)) {
-+            throw RequestError.invalidParams(undefined, "Invalid history cursor");
-+        }
-+        const sdk_sessions = await listSessions({
-+            dir: params.cwd ?? undefined,
-+            ...(paged ? { limit: 21, offset } : {}),
-+        });
-         const sessions = [];
--        for (const session of sdk_sessions) {
-+        for (const session of paged ? sdk_sessions.slice(0, 20) : sdk_sessions) {
-             if (!session.cwd)
-                 continue;
-             sessions.push({
-@@ -1213,6 +1231,7 @@ export class ClaudeAcpAgent {
-         }
-         return {
-             sessions,
-+            ...(paged ? { nextCursor: sdk_sessions.length > 20 ? String(offset + 20) : null } : {}),
-         };
-     }
-     /**
-@@ -1586,6 +1605,7 @@ export class ClaudeAcpAgent {
-         if (session.queryClosed) {
-             throw RequestError.internalError(undefined, SESSION_ENDED_MESSAGE);
-         }
-+        session.emdashContextWindow.invalidate();
-         const subscriptionGuard = this.runClaudeSubscriptionGuard(params.sessionId, session);
-         if (subscriptionGuard)
-             await subscriptionGuard;
-@@ -1944,7 +1964,7 @@ export class ClaudeAcpAgent {
-         // Deliver into the running turn rather than queuing behind it as a fresh
-         // prompt would.
-         userMessage.priority =
--            (session.pendingUserInputCount ?? 0) > 0 ? STEER_PRIORITY_LATER : STEER_PRIORITY_NOW;
-+            (session.pendingUserInputCount ?? 0) > 0 ? STEER_PRIORITY_LATER : (params._meta?.steering?.priority ?? STEER_PRIORITY_NOW);
-         // Mark before the push and in the same synchronous section as the in-flight
-         // check: the interrupt can have the CLI finalizing the aborted cycle by the
-         // time the consumer next runs, and an unmarked result would settle the turn
-@@ -1960,7 +1980,10 @@ export class ClaudeAcpAgent {
-         }
-         session.input.push(userMessage);
-         const firstText = params.prompt[0]?.type === "text" ? params.prompt[0].text : "";
--        await this.publishGoalFromPrompt(sessionId, firstText, steeredUuid);
-+        // 入队已经成功，旁路标题更新失败不能使客户端误判并重发。
-+        await this.publishGoalFromPrompt(sessionId, firstText, steeredUuid).catch((error) => {
-+            this.logger.error("Failed to publish steering goal", error);
-+        });
-         return { outcome: "injected" };
-     }
-     async stopAsyncTask(params) {
-@@ -2071,6 +2094,7 @@ export class ClaudeAcpAgent {
-             logError: (message, error) => this.logger.error(message, error),
-         });
-         session.contextCompaction = compaction;
-+        const contextWindow = session.emdashContextWindow;
-         const sendUpdate = async (notification) => {
-             const { update } = notification;
-             const claudeMeta = update._meta?.claudeCode;
-@@ -2162,17 +2186,13 @@ export class ClaudeAcpAgent {
-         };
-         // ACP's usage_update has no model field, so the model the usage belongs
-         // to rides in `_meta` alongside the other `_claude/*` keys.
--        const attachUsageModel = (update) => {
--            if (!lastAssistantModel)
--                return update;
--            return {
--                ...update,
--                _meta: {
--                    ...(update._meta ?? {}),
--                    "_claude/model": lastAssistantModel,
--                },
--            };
--        };
-+        const attachUsageModel = (update) => contextWindow.decorate({
-+            ...update,
-+            _meta: {
-+                ...(update._meta ?? {}),
-+                ...(lastAssistantModel ? { "_claude/model": lastAssistantModel } : {}),
-+            },
-+        }, session.contextWindowAuthoritative);
-         const internalErrorForClient = (data, rawDetail) => RequestError.internalError(data, supportsAirSessionFailures(this.clientCapabilities) ? undefined : rawDetail);
-         const ensureUsageMarkdown = (turn) => {
-             if (!turn.isUsageCommand || !turn.usageMarkdownAbort)
-@@ -2218,6 +2238,7 @@ export class ClaudeAcpAgent {
-          *  interrupt (no orphan emitted) — drop the stale count so a later echo-less
-          *  result isn't wrongly skipped. */
-         const activateTurn = (turn) => {
-+            contextWindow.invalidate();
-             session.activeTurn = turn;
-             session.cancelled = false;
-             compaction.resume();
-@@ -3792,6 +3813,16 @@ export class ClaudeAcpAgent {
-                                         }),
-                                     }),
-                                 });
-+                                // 不等待控制请求，SDK 的结果消费和下一轮 prompt 必须保持畅通。
-+                                const query = session.query;
-+                                const model = session.models.currentModelId;
-+                                void contextWindow.refresh(query,
-+                                    () => this.sessions[params.sessionId] === session && !session.queryClosed
-+                                        && session.query === query && session.models.currentModelId === model,
-+                                    async (update) => {
-+                                        session.contextUsedTokens = update.used;
-+                                        await this.client.sessionUpdate({ sessionId: params.sessionId, update });
-+                                    });
-                             }
-                             if (session.cancelled) {
-                                 session.pendingExitPlanModeInterruption = undefined;
-@@ -4657,6 +4688,7 @@ export class ClaudeAcpAgent {
-                         break;
-                     }
-                     case "conversation_reset": {
-+                        contextWindow.invalidate(true);
-                         // The SDK has switched to a fresh conversation, whose Task* IDs
-                         // and task store are independent of the previous transcript.
-                         // Clear both the in-memory snapshot and the client's visible plan
-@@ -5196,6 +5228,7 @@ export class ClaudeAcpAgent {
-             await this.sessionModes.publishCurrent(params.sessionId, effectiveValue);
-         }
-         else if (params.configId === MODEL_CONFIG_ID) {
-+            session.emdashContextWindow.invalidate(true);
-             await this.sessions[params.sessionId].query.setModel(resolvedValue);
-         }
-         // Effort SDK sync is handled inside applyConfigOptionValue so that direct
-@@ -5846,6 +5879,7 @@ export class ClaudeAcpAgent {
-             // carries no "1m" token.
-             const newModelInfo = session.modelInfos.find((m) => m.value === value);
-             if (session.models.currentModelId !== value) {
-+                session.emdashContextWindow.invalidate(true);
-                 // Seed the new model's context window WITHOUT any IPC on the switch
-                 // path: cached authoritative value if we've already learned it (from a
-                 // prior turn's `result.modelUsage`), else the text heuristic, else the
-@@ -5861,6 +5895,14 @@ export class ClaudeAcpAgent {
-                 const seeded = immediateContextWindow(session.providerCacheKey, value, newModelInfo);
-                 session.contextWindowSize = seeded.size;
-                 session.contextWindowAuthoritative = seeded.authoritative;
-+                // 切换模型立即清除旧窗口；新 CLI 窗口在下一轮 result 后确认。
-+                await this.client.sessionUpdate({
-+                    sessionId,
-+                    update: session.emdashContextWindow.decorate({
-+                        sessionUpdate: "usage_update", used: session.contextUsedTokens ?? 0,
-+                        size: seeded.size,
-+                    }, seeded.authoritative),
-+                });
-             }
-             session.models = { ...session.models, currentModelId: value };
-             const modeDowngraded = await this.sessionModes.reconcileForModel(session, newModelInfo);
-@@ -6422,8 +6464,24 @@ export class ClaudeAcpAgent {
-             tools,
-             hooks: {
-                 ...userProvidedOptions?.hooks,
-+                PostToolUseFailure: [
-+                    ...(userProvidedOptions?.hooks?.PostToolUseFailure || []),
-+                    { hooks: [async (input) => {
-+                        if (!input.agent_id && this.clientCapabilities?._meta?.["emdash.dev/queued-steering"] === true) {
-+                            await this.client.extMethod("_emdash/drainQueuedPrompts", { sessionId });
-+                        }
-+                        return {};
-+                    }] },
-+                ],
-                 PostToolUse: [
-                     ...(userProvidedOptions?.hooks?.PostToolUse || []),
-+                    { hooks: [async (input) => {
-+                        // 主 agent 在工具边界取得补充消息，不抢占正在运行的工具。
-+                        if (!input.agent_id && this.clientCapabilities?._meta?.["emdash.dev/queued-steering"] === true) {
-+                            await this.client.extMethod("_emdash/drainQueuedPrompts", { sessionId });
-+                        }
-+                        return {};
-+                    }] },
-                     {
-                         hooks: [
-                             createPostToolUseHook({
-@@ -6669,27 +6727,7 @@ export class ClaudeAcpAgent {
-             if (useRecommendedValue && typeof initialEffort?.currentValue === "string") {
-                 await q.applyFlagSettings({ effortLevel: toSdkEffortLevel(initialEffort.currentValue) });
-             }
--            // Seed the context window without extra IPC. The cached authoritative
--            // window from a prior turn wins (`result.modelUsage`, cross-session),
--            // then the text heuristic, then the default. We deliberately do NOT issue
--            // a getContextUsage call here: before the first prompt turn that control
--            // request can take tens of seconds, on resumed as well as fresh sessions.
--            // The authoritative window arrives on the first `result.modelUsage` and
--            // is cached from there.
--            //
--            // Text inference alone misses aliases that resolve to extended-context
--            // models with no "1m" token anywhere in their id or description (e.g.
--            // `sonnet` → claude-sonnet-5, natively ~1M): those stream
--            // `usage_update.size: 200000` until the first result's modelUsage corrects
--            // it — but the cache means only the FIRST session to ever run a turn on such
--            // a model eats that window, not every fresh session after a process
--            // restart (issue #596).
--            //
--            // The inference fallback is deliberately keyed to the allowlisted entry: a
--            // fallback-resolved sibling's resolvedModel/displayName/description can
--            // describe a different context lane than the verbatim live id (e.g. an
--            // "opus[1m]" row matched for a bare 200k id), so on the fallback path only
--            // the id itself is a trustworthy window signal.
-+            // 同步播种不等待控制请求；注册完成后另行异步查询 summary 确认窗口。
-             const seededWindow = immediateContextWindow(providerCacheKey, models.currentModelId, allowlistedModelInfo);
-             this.sessions[sessionId] = {
-                 query: q,
-@@ -6732,6 +6770,7 @@ export class ClaudeAcpAgent {
-                 abortController,
-                 emitRawSDKMessages: sessionMeta?.claudeCode?.emitRawSDKMessages ?? false,
-                 forwardSubagentText,
-+                emdashContextWindow: new ContextWindowTracker(this.logger),
-                 contextWindowSize: seededWindow.size,
-                 contextWindowAuthoritative: seededWindow.authoritative,
-                 providerCacheKey,
-@@ -6752,6 +6791,7 @@ export class ClaudeAcpAgent {
-                 fileChangeReporter,
-             };
-             timing.phase("register");
-+            this.initializeContextWindow(sessionId, creationOpts.resume === undefined);
-             return {
-                 sessionId,
-                 modes,
-@@ -6763,6 +6803,20 @@ export class ClaudeAcpAgent {
-             throw error;
-         }
-     }
-+    /** 初始化完成后异步探测，不把控制请求加入 session/new 或 prompt 的等待链。 */
-+    initializeContextWindow(sessionId, fresh) {
-+        const session = this.sessions[sessionId];
-+        const query = session.query;
-+        const model = session.models.currentModelId;
-+        void session.emdashContextWindow.initialize(query,
-+            () => this.sessions[sessionId] === session && !session.queryClosed
-+                && session.query === query && session.models.currentModelId === model,
-+            async (update) => {
-+                session.contextUsedTokens = update.used;
-+                await this.client.sessionUpdate({ sessionId, update });
-+            }, fresh);
-+    }
-+
-     /**
-      * Provider routing is baked into the environment of each SDK Query. Wait for
-      * all submitted turns to settle, close every query, then resume each Claude
 diff --git a/dist/context-window.d.ts b/dist/context-window.d.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..519301e298eac4315b8c7115305d8e8fa7a4bab6
@@ -477,3 +193,338 @@ index 685522a3f4351b07e6f952d44f9445c5c6feb64e..50cfcd58ac80053821bd6b8ea8e3edb1
          })),
          currentModelId: currentModel.value,
      };
+diff --git a/dist/acp-agent.js b/dist/acp-agent.js
+--- a/dist/acp-agent.js
++++ b/dist/acp-agent.js
+@@ -1,3 +1,4 @@
++import { ContextWindowTracker } from "./context-window.js";
+ import { agent as acpAgent, CreateElicitationResponse, methods, ndJsonStream, RequestError, } from "@agentclientprotocol/sdk";
+ import { deleteSession, getSessionMessages, listSessions, query, } from "@anthropic-ai/claude-agent-sdk";
+ import { GOAL_ACTIONS, GOAL_CONTROL_METHOD, GOAL_EXTENSION_VERSION, goalUpdateFromPrompt, parseGoalRequest, toGoalSnapshot, } from "./goal-extension.js";
+@@ -200,6 +201,10 @@
+         throw RequestError.invalidParams(undefined, "steer params require a non-empty prompt array");
+     }
+     const steering = _meta && typeof _meta === "object" ? _meta.steering : undefined;
++    const priority = steering && typeof steering === "object" ? steering.priority : undefined;
++    if (priority !== undefined && priority !== "now" && priority !== "next") {
++        throw RequestError.invalidParams(undefined, "unsupported steering priority");
++    }
+     const idleBehavior = steering && typeof steering === "object"
+         ? steering.idleBehavior
+         : undefined;
+@@ -757,6 +762,9 @@
+     extNotification(method, params) {
+         return this.ctx.notify(method, params);
+     }
++    extMethod(method, params) {
++        return this.ctx.request(method, params);
++    }
+ }
+ function raceWithAbort(operation, signal) {
+     return new Promise((resolve, reject) => {
+@@ -1136,9 +1144,11 @@
+             // steering extension contract: advertises the `_session/steering` request
+             // so clients know they may inject a follow-up into a running turn.
+             _meta: {
++                "emdash.dev/activities": 1,
+                 ...airSessionFailureCapabilityMeta(AGENT_FILE_CHANGE_REPORT_CAPABILITY, AIR_NATIVE_SUBAGENT_SESSIONS_CAPABILITY, AIR_ASYNC_TASKS_CAPABILITY, AIR_RECOMMENDED_CONFIG_VALUE_CAPABILITY),
+                 steering: {
+                     supported: true,
++                    priorities: ["now", "next"],
+                 },
+                 goal: {
+                     version: GOAL_EXTENSION_VERSION,
+@@ -1199,9 +1209,18 @@
+         return result;
+     }
+     async listSessions(params) {
+-        const sdk_sessions = await listSessions({ dir: params.cwd ?? undefined });
++        const pageSize = params._meta?.["emdash.dev/history-page-size"];
++        const paged = pageSize === 20;
++        const offset = paged && params.cursor ? Number(params.cursor) : 0;
++        if (paged && (!Number.isSafeInteger(offset) || offset < 0)) {
++            throw RequestError.invalidParams(undefined, "Invalid history cursor");
++        }
++        const sdk_sessions = await listSessions({
++            dir: params.cwd ?? undefined,
++            ...(paged ? { limit: 21, offset } : {}),
++        });
+         const sessions = [];
+-        for (const session of sdk_sessions) {
++        for (const session of paged ? sdk_sessions.slice(0, 20) : sdk_sessions) {
+             if (!session.cwd)
+                 continue;
+             sessions.push({
+@@ -1213,6 +1232,7 @@
+         }
+         return {
+             sessions,
++            ...(paged ? { nextCursor: sdk_sessions.length > 20 ? String(offset + 20) : null } : {}),
+         };
+     }
+     /**
+@@ -1586,6 +1606,7 @@
+         if (session.queryClosed) {
+             throw RequestError.internalError(undefined, SESSION_ENDED_MESSAGE);
+         }
++        session.emdashContextWindow.invalidate();
+         const subscriptionGuard = this.runClaudeSubscriptionGuard(params.sessionId, session);
+         if (subscriptionGuard)
+             await subscriptionGuard;
+@@ -1613,6 +1634,7 @@
+         // turn, pushes the user message onto the streaming input, makes sure the
+         // consumer is running, and awaits the deferred.
+         const turn = {
++            emdashTurnId: params._meta?.["emdash.dev/turn-id"],
+             promptUuid,
+             isLocalOnlyCommand,
+             ...(isUsageCommand ? { isUsageCommand: true } : {}),
+@@ -1944,7 +1966,7 @@
+         // Deliver into the running turn rather than queuing behind it as a fresh
+         // prompt would.
+         userMessage.priority =
+-            (session.pendingUserInputCount ?? 0) > 0 ? STEER_PRIORITY_LATER : STEER_PRIORITY_NOW;
++            (session.pendingUserInputCount ?? 0) > 0 ? STEER_PRIORITY_LATER : (params._meta?.steering?.priority ?? STEER_PRIORITY_NOW);
+         // Mark before the push and in the same synchronous section as the in-flight
+         // check: the interrupt can have the CLI finalizing the aborted cycle by the
+         // time the consumer next runs, and an unmarked result would settle the turn
+@@ -1960,7 +1982,10 @@
+         }
+         session.input.push(userMessage);
+         const firstText = params.prompt[0]?.type === "text" ? params.prompt[0].text : "";
+-        await this.publishGoalFromPrompt(sessionId, firstText, steeredUuid);
++        // 入队已经成功，旁路标题更新失败不能使客户端误判并重发。
++        await this.publishGoalFromPrompt(sessionId, firstText, steeredUuid).catch((error) => {
++            this.logger.error("Failed to publish steering goal", error);
++        });
+         return { outcome: "injected" };
+     }
+     async stopAsyncTask(params) {
+@@ -2071,6 +2096,16 @@
+             logError: (message, error) => this.logger.error(message, error),
+         });
+         session.contextCompaction = compaction;
++        const contextWindow = session.emdashContextWindow;
++        const activityHelpers = this.clientCapabilities?._meta?.["emdash.dev/activities"] === 1
++            ? await import("@emdash/agent-events") : null;
++        const emdashActivities = activityHelpers
++            ? session.emdashActivities ??= new activityHelpers.ActivityReporter() : null;
++        const emitActivity = async (update) => {
++            if (update && this.clientCapabilities?._meta?.["emdash.dev/activities"] === 1) {
++                await this.client.sessionUpdate({ sessionId: params.sessionId, update });
++            }
++        };
+         const sendUpdate = async (notification) => {
+             const { update } = notification;
+             const claudeMeta = update._meta?.claudeCode;
+@@ -2162,17 +2197,13 @@
+         };
+         // ACP's usage_update has no model field, so the model the usage belongs
+         // to rides in `_meta` alongside the other `_claude/*` keys.
+-        const attachUsageModel = (update) => {
+-            if (!lastAssistantModel)
+-                return update;
+-            return {
+-                ...update,
+-                _meta: {
+-                    ...(update._meta ?? {}),
+-                    "_claude/model": lastAssistantModel,
+-                },
+-            };
+-        };
++        const attachUsageModel = (update) => contextWindow.decorate({
++            ...update,
++            _meta: {
++                ...(update._meta ?? {}),
++                ...(lastAssistantModel ? { "_claude/model": lastAssistantModel } : {}),
++            },
++        }, session.contextWindowAuthoritative);
+         const internalErrorForClient = (data, rawDetail) => RequestError.internalError(data, supportsAirSessionFailures(this.clientCapabilities) ? undefined : rawDetail);
+         const ensureUsageMarkdown = (turn) => {
+             if (!turn.isUsageCommand || !turn.usageMarkdownAbort)
+@@ -2218,6 +2249,7 @@
+          *  interrupt (no orphan emitted) — drop the stale count so a later echo-less
+          *  result isn't wrongly skipped. */
+         const activateTurn = (turn) => {
++            contextWindow.invalidate();
+             session.activeTurn = turn;
+             session.cancelled = false;
+             compaction.resume();
+@@ -2482,6 +2514,8 @@
+                 !session.activeTurn.settled &&
+                 turnAwaitingSubagents(session.activeTurn)) {
+                 session.activeTurn.deferredSettle = outcome;
++                const count = [...session.activeTurn.spawnedTaskIds ?? []].filter(id => session.liveBackgroundTasks.has(id)).length;
++                await emitActivity(activityHelpers?.turnActivity(session.activeTurn.emdashTurnId, `Waiting for ${count} background agents…`));
+             }
+             else {
+                 await settleActive(outcome);
+@@ -2499,6 +2533,7 @@
+             }
+             turn.settling = true;
+             turn.settlingOutcome = result;
++            await emitActivity(activityHelpers?.turnActivity(turn.emdashTurnId, "Finishing turn…"));
+             if (reportReason === "notReported") {
+                 await session.fileChangeReporter?.report(turn, session.query);
+                 // cancel() can settle a held turn while the bounded checkpoint preview
+@@ -2784,6 +2819,13 @@
+                     // front rather than restarting a consumer on the exhausted stream.
+                     this.closeQueryStream(session);
+                     return;
++                }
++                if (emdashActivities && this.clientCapabilities?._meta?.["emdash.dev/activities"] === 1) {
++                    const turn = session.activeTurn ?? firstUnsettledQueuedTurn();
++                    const activityMessage = message.type === "tool_progress"
++                        ? { ...message, tool_use_id: session.emittedToolCalls.has(message.tool_use_id) ? message.tool_use_id : message.parent_tool_use_id }
++                        : message;
++                    for (const update of emdashActivities.claude(activityMessage, turn?.emdashTurnId)) await emitActivity(update);
+                 }
+                 if (session.emitRawSDKMessages &&
+                     shouldEmitRawMessage(session.emitRawSDKMessages, message)) {
+@@ -3792,6 +3834,16 @@
+                                         }),
+                                     }),
+                                 });
++                                // 不等待控制请求，SDK 的结果消费和下一轮 prompt 必须保持畅通。
++                                const query = session.query;
++                                const model = session.models.currentModelId;
++                                void contextWindow.refresh(query,
++                                    () => this.sessions[params.sessionId] === session && !session.queryClosed
++                                        && session.query === query && session.models.currentModelId === model,
++                                    async (update) => {
++                                        session.contextUsedTokens = update.used;
++                                        await this.client.sessionUpdate({ sessionId: params.sessionId, update });
++                                    });
+                             }
+                             if (session.cancelled) {
+                                 session.pendingExitPlanModeInterruption = undefined;
+@@ -4657,6 +4709,7 @@
+                         break;
+                     }
+                     case "conversation_reset": {
++                        contextWindow.invalidate(true);
+                         // The SDK has switched to a fresh conversation, whose Task* IDs
+                         // and task store are independent of the previous transcript.
+                         // Clear both the in-memory snapshot and the client's visible plan
+@@ -5196,6 +5249,7 @@
+             await this.sessionModes.publishCurrent(params.sessionId, effectiveValue);
+         }
+         else if (params.configId === MODEL_CONFIG_ID) {
++            session.emdashContextWindow.invalidate(true);
+             await this.sessions[params.sessionId].query.setModel(resolvedValue);
+         }
+         // Effort SDK sync is handled inside applyConfigOptionValue so that direct
+@@ -5846,6 +5900,7 @@
+             // carries no "1m" token.
+             const newModelInfo = session.modelInfos.find((m) => m.value === value);
+             if (session.models.currentModelId !== value) {
++                session.emdashContextWindow.invalidate(true);
+                 // Seed the new model's context window WITHOUT any IPC on the switch
+                 // path: cached authoritative value if we've already learned it (from a
+                 // prior turn's `result.modelUsage`), else the text heuristic, else the
+@@ -5861,6 +5916,14 @@
+                 const seeded = immediateContextWindow(session.providerCacheKey, value, newModelInfo);
+                 session.contextWindowSize = seeded.size;
+                 session.contextWindowAuthoritative = seeded.authoritative;
++                // 切换模型立即清除旧窗口；新 CLI 窗口在下一轮 result 后确认。
++                await this.client.sessionUpdate({
++                    sessionId,
++                    update: session.emdashContextWindow.decorate({
++                        sessionUpdate: "usage_update", used: session.contextUsedTokens ?? 0,
++                        size: seeded.size,
++                    }, seeded.authoritative),
++                });
+             }
+             session.models = { ...session.models, currentModelId: value };
+             const modeDowngraded = await this.sessionModes.reconcileForModel(session, newModelInfo);
+@@ -6422,8 +6485,24 @@
+             tools,
+             hooks: {
+                 ...userProvidedOptions?.hooks,
++                PostToolUseFailure: [
++                    ...(userProvidedOptions?.hooks?.PostToolUseFailure || []),
++                    { hooks: [async (input) => {
++                        if (!input.agent_id && this.clientCapabilities?._meta?.["emdash.dev/queued-steering"] === true) {
++                            await this.client.extMethod("_emdash/drainQueuedPrompts", { sessionId });
++                        }
++                        return {};
++                    }] },
++                ],
+                 PostToolUse: [
+                     ...(userProvidedOptions?.hooks?.PostToolUse || []),
++                    { hooks: [async (input) => {
++                        // 主 agent 在工具边界取得补充消息，不抢占正在运行的工具。
++                        if (!input.agent_id && this.clientCapabilities?._meta?.["emdash.dev/queued-steering"] === true) {
++                            await this.client.extMethod("_emdash/drainQueuedPrompts", { sessionId });
++                        }
++                        return {};
++                    }] },
+                     {
+                         hooks: [
+                             createPostToolUseHook({
+@@ -6669,27 +6748,7 @@
+             if (useRecommendedValue && typeof initialEffort?.currentValue === "string") {
+                 await q.applyFlagSettings({ effortLevel: toSdkEffortLevel(initialEffort.currentValue) });
+             }
+-            // Seed the context window without extra IPC. The cached authoritative
+-            // window from a prior turn wins (`result.modelUsage`, cross-session),
+-            // then the text heuristic, then the default. We deliberately do NOT issue
+-            // a getContextUsage call here: before the first prompt turn that control
+-            // request can take tens of seconds, on resumed as well as fresh sessions.
+-            // The authoritative window arrives on the first `result.modelUsage` and
+-            // is cached from there.
+-            //
+-            // Text inference alone misses aliases that resolve to extended-context
+-            // models with no "1m" token anywhere in their id or description (e.g.
+-            // `sonnet` → claude-sonnet-5, natively ~1M): those stream
+-            // `usage_update.size: 200000` until the first result's modelUsage corrects
+-            // it — but the cache means only the FIRST session to ever run a turn on such
+-            // a model eats that window, not every fresh session after a process
+-            // restart (issue #596).
+-            //
+-            // The inference fallback is deliberately keyed to the allowlisted entry: a
+-            // fallback-resolved sibling's resolvedModel/displayName/description can
+-            // describe a different context lane than the verbatim live id (e.g. an
+-            // "opus[1m]" row matched for a bare 200k id), so on the fallback path only
+-            // the id itself is a trustworthy window signal.
++            // 同步播种不等待控制请求；注册完成后另行异步查询 summary 确认窗口。
+             const seededWindow = immediateContextWindow(providerCacheKey, models.currentModelId, allowlistedModelInfo);
+             this.sessions[sessionId] = {
+                 query: q,
+@@ -6732,6 +6791,7 @@
+                 abortController,
+                 emitRawSDKMessages: sessionMeta?.claudeCode?.emitRawSDKMessages ?? false,
+                 forwardSubagentText,
++                emdashContextWindow: new ContextWindowTracker(this.logger),
+                 contextWindowSize: seededWindow.size,
+                 contextWindowAuthoritative: seededWindow.authoritative,
+                 providerCacheKey,
+@@ -6752,6 +6812,7 @@
+                 fileChangeReporter,
+             };
+             timing.phase("register");
++            this.initializeContextWindow(sessionId, creationOpts.resume === undefined);
+             return {
+                 sessionId,
+                 modes,
+@@ -6763,6 +6824,20 @@
+             throw error;
+         }
+     }
++    /** 初始化完成后异步探测，不把控制请求加入 session/new 或 prompt 的等待链。 */
++    initializeContextWindow(sessionId, fresh) {
++        const session = this.sessions[sessionId];
++        const query = session.query;
++        const model = session.models.currentModelId;
++        void session.emdashContextWindow.initialize(query,
++            () => this.sessions[sessionId] === session && !session.queryClosed
++                && session.query === query && session.models.currentModelId === model,
++            async (update) => {
++                session.contextUsedTokens = update.used;
++                await this.client.sessionUpdate({ sessionId, update });
++            }, fresh);
++    }
++
+     /**
+      * Provider routing is baked into the environment of each SDK Query. Wait for
+      * all submitted turns to settle, close every query, then resume each Claude

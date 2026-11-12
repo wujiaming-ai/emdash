@@ -48,6 +48,7 @@ import type {
   SyntheticItem,
   ThinkingGroupItem,
   TranscriptTurn,
+  TranscriptItem,
 } from '@/model';
 import type { ToolHeaderState } from './tool-header-state';
 
@@ -132,6 +133,18 @@ export function flattenTier(
     const items = turn.items as readonly ChatItem[];
     for (let i = 0; i < items.length; ) {
       const item = items[i];
+      if (isCompletedActivity(item)) {
+        let end = i + 1;
+        while (end < items.length && isCompletedActivity(items[end])) end += 1;
+        const events = items.slice(i, end) as Extract<TranscriptItem, { kind: 'notification' }>[];
+        processItem(
+          events.length > 1
+            ? { kind: 'activity-group', id: `${item.id}:activity-group`, events }
+            : item
+        );
+        i = end;
+        continue;
+      }
       if (item.kind !== 'thinking') {
         processItem(item);
         i += 1;
@@ -157,9 +170,19 @@ export function flattenTier(
   return out;
 }
 
+function isCompletedActivity(item: ChatItem): boolean {
+  return (
+    item.kind === 'notification' &&
+    item.activity?.status === 'completed' &&
+    item.activity.severity === 'info'
+  );
+}
+
 function shouldShowWorking(items: readonly ChatItem[]): boolean {
-  return !items.some(
-    (item) => item.kind !== 'notification' && (item.kind !== 'message' || item.role === 'assistant')
+  return !items.some((item) =>
+    item.kind === 'notification'
+      ? item.activity?.category === 'turn'
+      : item.kind !== 'message' || item.role === 'assistant'
   );
 }
 

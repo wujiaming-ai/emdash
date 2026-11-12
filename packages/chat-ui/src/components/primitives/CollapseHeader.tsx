@@ -42,6 +42,8 @@ export type CollapseHeaderProps = {
   awaitingPermission?: boolean;
   /** Explicit pixel height for the header row. */
   height: number;
+  /** 按需启用键盘展开；现有调用者保持原交互。 */
+  keyboard?: boolean;
   children: JSX.Element;
 };
 
@@ -51,6 +53,13 @@ export function CollapseHeader(props: CollapseHeaderProps) {
       class={collapseHeader}
       style={{ height: `${props.height}px` }}
       role="button"
+      tabIndex={props.keyboard ? 0 : undefined}
+      onKeyDown={(event) => {
+        if (props.keyboard && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          event.currentTarget.click();
+        }
+      }}
       aria-expanded={props.expanded ? 'true' : 'false'}
       data-collapse-id={props.id}
     >

@@ -15,9 +15,14 @@ export function connectClaudeAcp(io: AcpProcessIo, toClient: AcpClientFactory): 
       ...params,
       clientCapabilities: {
         ...params.clientCapabilities,
-        _meta: { ...params.clientCapabilities?._meta, 'emdash.dev/queued-steering': true },
+        _meta: {
+          ...params.clientCapabilities?._meta,
+          'emdash.dev/queued-steering': true,
+          'emdash.dev/activities': 1,
+        },
       },
     });
+    agent.supportsActivities = response._meta?.['emdash.dev/activities'] === 1;
     const steering = response._meta?.steering;
     if (
       steering &&

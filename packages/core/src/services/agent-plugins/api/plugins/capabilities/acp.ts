@@ -55,6 +55,8 @@ export interface AcpProcessIo {
  * structurally — only the methods emdash actually uses are required here.
  */
 export interface AcpAgentApi {
+  /** 协商后才启用原生事件摘要，旧服务与其他 Agent 保持兼容。 */
+  supportsActivities?: boolean;
   listSessions?(params: ListSessionsRequest): Promise<ListSessionsResponse>;
   initialize(params: InitializeRequest): Promise<InitializeResponse>;
   newSession(params: NewSessionRequest): Promise<NewSessionResponse>;
